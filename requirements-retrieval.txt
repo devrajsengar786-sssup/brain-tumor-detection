@@ -1,0 +1,8 @@
+# Core retrieval baseline: lossless NIfTI I/O, morphology/intensity features, and vector search.
+nibabel==5.3.2
+scipy
+scikit-learn
+joblib
+pyradiomics==3.1.0
+
+# The 3D autoencoder uses the TensorFlow already pinned in requirements.txt.

@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.streamlit/secrets.toml
+
+# Large, potentially controlled research data and generated experiment artifacts.
+data/upenn_gbm/
+artifacts/
+nnunet_raw/
+nnunet_preprocessed/
+nnunet_results/
+tmp/

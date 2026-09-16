@@ -1,0 +1,3 @@
+# Install PyTorch for the target CUDA/CPU environment first, then install this file.
+# See nnU-Net's official installation documentation before training on a GPU.
+nnunetv2>=2.6,<3

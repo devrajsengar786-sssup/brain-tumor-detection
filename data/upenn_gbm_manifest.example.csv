@@ -1,0 +1,2 @@
+case_id,patient_id,t1,t1gd,t2,flair,mask_path,split
+UPENN-GBM-00001_scan-01,UPENN-GBM-00001,/absolute/path/to/UPENN-GBM-00001_t1.nii.gz,/absolute/path/to/UPENN-GBM-00001_t1gd.nii.gz,/absolute/path/to/UPENN-GBM-00001_t2.nii.gz,/absolute/path/to/UPENN-GBM-00001_flair.nii.gz,/absolute/path/to/UPENN-GBM-00001_seg.nii.gz,train
