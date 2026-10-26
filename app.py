@@ -81,70 +81,34 @@ if not require_app_access():
 # =========================
 # THEME / CUSTOM CSS
 # =========================
-PRIMARY = "#148d85"       # OrganBridge clinical teal
-PRIMARY_DARK = "#08766f"
-BG_DARK = "#f6f8fb"
-CARD_BG = "#ffffff"
-CARD_BORDER = "#e8edf1"
-GREEN = "#208571"
-RED = "#b6574d"
-TEXT_MUTED = "#7d8d9d"
+PRIMARY = "#a78bfa"       # soft violet - main accent
+PRIMARY_DARK = "#7c3aed"
+BG_DARK = "#0f1117"
+CARD_BG = "#1a1d29"
+CARD_BORDER = "#2d2f3f"
+GREEN = "#4ade80"
+RED = "#f87171"
+TEXT_MUTED = "#9ca3af"
 
 st.markdown(f"""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-
     .stApp {{
-        background: {BG_DARK};
-        color: #1e3047;
-        font-family: 'DM Sans', system-ui, sans-serif;
-    }}
-    .block-container {{
-        max-width: 1380px;
-        padding-top: 1.7rem;
-    }}
-    .stApp [data-testid="stMarkdownContainer"],
-    .stApp [data-testid="stMetricValue"] {{
-        color: #1e3047;
-    }}
-    .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {{
-        color: #1a2c45;
-        font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+        background-color: {BG_DARK};
     }}
 
     /* Sidebar */
     section[data-testid="stSidebar"] {{
-        background: #112039;
-        border-right: 0;
-    }}
-    section[data-testid="stSidebar"] > div:first-child {{
-        padding-top: 1.7rem;
-    }}
-    section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
-    section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
-    section[data-testid="stSidebar"] h1,
-    section[data-testid="stSidebar"] h2,
-    section[data-testid="stSidebar"] h3 {{
-        color: #e8f0f8;
-    }}
-    section[data-testid="stSidebar"] [data-baseweb="select"] > div {{
-        background: #203b55;
-        border-color: #456078;
-        color: #ffffff;
-        border-radius: 9px;
-    }}
-    section[data-testid="stSidebar"] [data-baseweb="select"] svg {{
-        fill: #cfe0ef;
+        background-color: {CARD_BG};
+        border-right: 1px solid {CARD_BORDER};
     }}
 
     /* Generic card */
     .app-card {{
         background-color: {CARD_BG};
         border: 1px solid {CARD_BORDER};
-        border-radius: 18px;
+        border-radius: 16px;
         padding: 1.5rem;
         margin-bottom: 1rem;
-        box-shadow: 0 7px 30px rgba(21, 42, 69, 0.035);
     }}
 
     .app-card h4 {{
@@ -156,42 +120,19 @@ st.markdown(f"""
     .app-header {{
         display: flex;
         align-items: center;
-        gap: 0.9rem;
-        margin-bottom: 0.7rem;
+        gap: 0.8rem;
+        margin-bottom: 0.2rem;
     }}
     .app-header .brain-icon {{
-        display: grid;
-        place-items: center;
-        width: 2.85rem;
-        height: 2.85rem;
-        font-size: 1.8rem;
-        border-radius: 12px;
-        background: linear-gradient(155deg, #49d2c0, #138f84);
-        box-shadow: 0 6px 16px rgba(20, 141, 131, 0.16);
+        font-size: 2.6rem;
+        filter: drop-shadow(0 0 12px rgba(167, 139, 250, 0.5));
     }}
     .app-header h1 {{
         margin: 0;
-        color: #1a2c45;
-        font-size: 1.85rem;
-        font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
-        letter-spacing: -0.05em;
-    }}
-    .app-kicker {{
-        color: {PRIMARY};
-        font-size: 0.68rem;
-        font-weight: 700;
-        letter-spacing: 0.13em;
-        margin-bottom: 0.15rem;
-    }}
-    .app-status {{
-        margin-left: auto;
-        padding: 0.42rem 0.7rem;
-        border: 1px solid #d5eee8;
-        border-radius: 6px;
-        background: #eaf7f4;
-        color: {PRIMARY_DARK};
-        font-size: 0.75rem;
-        font-weight: 650;
+        background: linear-gradient(90deg, {PRIMARY} 0%, #60a5fa 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-size: 2.1rem;
     }}
     .app-subtitle {{
         color: {TEXT_MUTED};
@@ -201,19 +142,18 @@ st.markdown(f"""
 
     /* Result cards */
     .result-card {{
-        border-radius: 14px;
+        border-radius: 16px;
         padding: 1.6rem 1.8rem;
         margin-top: 1rem;
         border: 1px solid;
-        box-shadow: none;
     }}
     .result-card.tumor {{
-        background-color: #fdeee9;
-        border-color: #f2d4cc;
+        background-color: rgba(248, 113, 113, 0.08);
+        border-color: {RED};
     }}
     .result-card.no-tumor {{
-        background-color: #e8f7f1;
-        border-color: #d3eee4;
+        background-color: rgba(74, 222, 128, 0.08);
+        border-color: {GREEN};
     }}
     .result-label {{
         font-size: 0.85rem;
@@ -231,8 +171,8 @@ st.markdown(f"""
 
     /* Sidebar model info card */
     .sidebar-info {{
-        background: #1a304b;
-        border: 1px solid #2c435d;
+        background-color: rgba(167, 139, 250, 0.08);
+        border: 1px solid {PRIMARY_DARK};
         border-radius: 12px;
         padding: 1rem;
         margin-top: 0.8rem;
@@ -243,84 +183,15 @@ st.markdown(f"""
         margin: 0.3rem 0;
         font-size: 0.9rem;
     }}
-    .sidebar-info .metric-label {{ color: #a6bacb; }}
-    .sidebar-info .metric-val {{ color: #d5fff2; font-weight: 700; }}
+    .sidebar-info .metric-label {{ color: {TEXT_MUTED}; }}
+    .sidebar-info .metric-val {{ color: {PRIMARY}; font-weight: 600; }}
 
     /* Uploader area */
     div[data-testid="stFileUploader"] {{
-        border: 1.5px dashed #c9d9e2;
-        border-radius: 12px;
+        border: 2px dashed {CARD_BORDER};
+        border-radius: 16px;
         padding: 1rem;
-        background: #fbfdfd;
-    }}
-    div[data-testid="stFileUploader"]:hover {{
-        border-color: {PRIMARY};
-        background: #f0f8f8;
-    }}
-    .stTabs [data-baseweb="tab-list"] {{
-        gap: 0.25rem;
-        padding: 0.25rem;
-        border: 1px solid {CARD_BORDER};
-        border-radius: 10px;
-        background: #ffffff;
-    }}
-    .stTabs [data-baseweb="tab"] {{
-        height: 2.7rem;
-        border-radius: 10px;
-        color: #6f8393;
-        font-weight: 600;
-    }}
-    .stTabs [aria-selected="true"] {{
-        background: #eaf7f4;
-        color: {PRIMARY_DARK};
-    }}
-    .stTabs [data-baseweb="tab-highlight"] {{
-        background-color: {PRIMARY};
-    }}
-    div[data-testid="stMetric"] {{
-        border: 1px solid {CARD_BORDER};
-        border-radius: 10px;
-        padding: 0.75rem;
-        background: #fbfcfd;
-    }}
-    .stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] > button {{
-        border-radius: 9px;
-        border-color: #dce6e9;
-        font-weight: 650;
-        color: #24465b;
-        background: #ffffff;
-    }}
-    .stButton > button[kind="primary"], [data-testid="stFormSubmitButton"] > button[kind="primary"] {{
-        color: #ffffff;
-        border-color: {PRIMARY};
-        background: {PRIMARY};
-    }}
-    .app-topbar {{
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 1rem;
-        margin: -1.7rem -1rem 1.7rem;
-        padding: 0.9rem 1rem;
-        border-bottom: 1px solid {CARD_BORDER};
-        background: #ffffff;
-        color: #91a1b0;
-        font-size: 0.78rem;
-        font-weight: 600;
-    }}
-    .app-topbar strong {{ color: #43546a; }}
-    .demo-pill {{
-        display: inline-flex;
-        align-items: center;
-        gap: 0.35rem;
-        padding: 0.42rem 0.58rem;
-        border: 1px solid #d5eee8;
-        border-radius: 6px;
-        background: #eaf7f4;
-        color: {PRIMARY_DARK};
-        font-size: 0.65rem;
-        letter-spacing: 0.08em;
-        font-weight: 800;
+        background-color: {CARD_BG};
     }}
 
     .disclaimer {{
@@ -346,20 +217,11 @@ st.markdown(f"""
             margin-bottom: 0.35rem;
         }}
         .app-header .brain-icon {{
-            width: 3rem;
-            height: 3rem;
-            font-size: 1.9rem;
+            font-size: 2.05rem;
         }}
         .app-header h1 {{
-            font-size: 1.65rem;
+            font-size: 1.7rem;
             line-height: 1.15;
-        }}
-        .app-status {{
-            display: none;
-        }}
-        .app-topbar {{
-            margin: -1.1rem -0.9rem 1.25rem;
-            padding: 0.8rem 0.9rem;
         }}
         .app-subtitle {{
             font-size: 0.95rem;
@@ -915,17 +777,9 @@ with st.sidebar:
 # HEADER
 # =========================
 st.markdown("""
-<div class="app-topbar">
-    <span>BrainMRI <span style="padding: 0 0.5rem; color: #c2cad2;">/</span> <strong>Analysis workspace</strong></span>
-    <span class="demo-pill">● EDUCATIONAL DEMO</span>
-</div>
 <div class="app-header">
     <div class="brain-icon">🧠</div>
-    <div>
-        <div class="app-kicker">EDUCATIONAL MRI ANALYSIS</div>
-        <h1>Brain Tumor Detection</h1>
-    </div>
-    <div class="app-status">● Research demo</div>
+    <h1>Brain Tumor Detection</h1>
 </div>
 <p class="app-subtitle">Upload an MRI scan and choose a model from the sidebar to run the analysis.</p>
 """, unsafe_allow_html=True)
