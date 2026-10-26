@@ -81,34 +81,45 @@ if not require_app_access():
 # =========================
 # THEME / CUSTOM CSS
 # =========================
-PRIMARY = "#a78bfa"       # soft violet - main accent
-PRIMARY_DARK = "#7c3aed"
-BG_DARK = "#0f1117"
-CARD_BG = "#1a1d29"
-CARD_BORDER = "#2d2f3f"
-GREEN = "#4ade80"
-RED = "#f87171"
-TEXT_MUTED = "#9ca3af"
+PRIMARY = "#59d8ca"       # clinical teal - main accent
+PRIMARY_DARK = "#159e99"
+BG_DARK = "#07111f"
+CARD_BG = "#0d1b2a"
+CARD_BORDER = "#203a57"
+GREEN = "#3ddd9a"
+RED = "#ff7d8b"
+TEXT_MUTED = "#a8b9cd"
 
 st.markdown(f"""
 <style>
     .stApp {{
-        background-color: {BG_DARK};
+        background:
+            radial-gradient(circle at 88% -8%, rgba(56, 189, 248, 0.16), transparent 28rem),
+            radial-gradient(circle at -8% 20%, rgba(89, 216, 202, 0.10), transparent 24rem),
+            {BG_DARK};
+    }}
+    .block-container {{
+        max-width: 1380px;
+        padding-top: 2.1rem;
     }}
 
     /* Sidebar */
     section[data-testid="stSidebar"] {{
-        background-color: {CARD_BG};
+        background: linear-gradient(180deg, #0d1b2a 0%, #091522 100%);
         border-right: 1px solid {CARD_BORDER};
+    }}
+    section[data-testid="stSidebar"] > div:first-child {{
+        padding-top: 1.5rem;
     }}
 
     /* Generic card */
     .app-card {{
         background-color: {CARD_BG};
         border: 1px solid {CARD_BORDER};
-        border-radius: 16px;
+        border-radius: 18px;
         padding: 1.5rem;
         margin-bottom: 1rem;
+        box-shadow: 0 15px 35px rgba(0, 0, 0, 0.15);
     }}
 
     .app-card h4 {{
@@ -120,19 +131,44 @@ st.markdown(f"""
     .app-header {{
         display: flex;
         align-items: center;
-        gap: 0.8rem;
-        margin-bottom: 0.2rem;
+        gap: 0.9rem;
+        margin-bottom: 0.4rem;
     }}
     .app-header .brain-icon {{
-        font-size: 2.6rem;
-        filter: drop-shadow(0 0 12px rgba(167, 139, 250, 0.5));
+        display: grid;
+        place-items: center;
+        width: 3.5rem;
+        height: 3.5rem;
+        font-size: 2.2rem;
+        border: 1px solid rgba(89, 216, 202, 0.32);
+        border-radius: 16px;
+        background: linear-gradient(135deg, rgba(89, 216, 202, 0.22), rgba(96, 165, 250, 0.18));
+        box-shadow: 0 10px 24px rgba(37, 212, 194, 0.14);
     }}
     .app-header h1 {{
         margin: 0;
-        background: linear-gradient(90deg, {PRIMARY} 0%, #60a5fa 100%);
+        background: linear-gradient(90deg, #d8fffb 0%, {PRIMARY} 40%, #79b7ff 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        font-size: 2.1rem;
+        font-size: 2.25rem;
+        letter-spacing: -0.03em;
+    }}
+    .app-kicker {{
+        color: {PRIMARY};
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0.13em;
+        margin-bottom: 0.15rem;
+    }}
+    .app-status {{
+        margin-left: auto;
+        padding: 0.42rem 0.7rem;
+        border: 1px solid rgba(89, 216, 202, 0.32);
+        border-radius: 999px;
+        background: rgba(89, 216, 202, 0.08);
+        color: #b9fff6;
+        font-size: 0.75rem;
+        font-weight: 650;
     }}
     .app-subtitle {{
         color: {TEXT_MUTED};
@@ -146,6 +182,7 @@ st.markdown(f"""
         padding: 1.6rem 1.8rem;
         margin-top: 1rem;
         border: 1px solid;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
     }}
     .result-card.tumor {{
         background-color: rgba(248, 113, 113, 0.08);
@@ -171,9 +208,9 @@ st.markdown(f"""
 
     /* Sidebar model info card */
     .sidebar-info {{
-        background-color: rgba(167, 139, 250, 0.08);
+        background: linear-gradient(145deg, rgba(89, 216, 202, 0.12), rgba(96, 165, 250, 0.07));
         border: 1px solid {PRIMARY_DARK};
-        border-radius: 12px;
+        border-radius: 14px;
         padding: 1rem;
         margin-top: 0.8rem;
     }}
@@ -188,10 +225,45 @@ st.markdown(f"""
 
     /* Uploader area */
     div[data-testid="stFileUploader"] {{
-        border: 2px dashed {CARD_BORDER};
+        border: 1.5px dashed #356080;
         border-radius: 16px;
         padding: 1rem;
-        background-color: {CARD_BG};
+        background: rgba(7, 17, 31, 0.45);
+    }}
+    div[data-testid="stFileUploader"]:hover {{
+        border-color: {PRIMARY};
+        background: rgba(89, 216, 202, 0.06);
+    }}
+    .stTabs [data-baseweb="tab-list"] {{
+        gap: 0.25rem;
+        padding: 0.25rem;
+        border: 1px solid {CARD_BORDER};
+        border-radius: 14px;
+        background: rgba(13, 27, 42, 0.72);
+    }}
+    .stTabs [data-baseweb="tab"] {{
+        height: 2.7rem;
+        border-radius: 10px;
+        color: {TEXT_MUTED};
+        font-weight: 600;
+    }}
+    .stTabs [aria-selected="true"] {{
+        background: rgba(89, 216, 202, 0.13);
+        color: #dcfffb;
+    }}
+    .stTabs [data-baseweb="tab-highlight"] {{
+        background-color: {PRIMARY};
+    }}
+    div[data-testid="stMetric"] {{
+        border: 1px solid {CARD_BORDER};
+        border-radius: 12px;
+        padding: 0.75rem;
+        background: rgba(7, 17, 31, 0.42);
+    }}
+    .stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] > button {{
+        border-radius: 10px;
+        border-color: rgba(89, 216, 202, 0.45);
+        font-weight: 650;
     }}
 
     .disclaimer {{
@@ -217,11 +289,16 @@ st.markdown(f"""
             margin-bottom: 0.35rem;
         }}
         .app-header .brain-icon {{
-            font-size: 2.05rem;
+            width: 3rem;
+            height: 3rem;
+            font-size: 1.9rem;
         }}
         .app-header h1 {{
-            font-size: 1.7rem;
+            font-size: 1.65rem;
             line-height: 1.15;
+        }}
+        .app-status {{
+            display: none;
         }}
         .app-subtitle {{
             font-size: 0.95rem;
@@ -779,7 +856,11 @@ with st.sidebar:
 st.markdown("""
 <div class="app-header">
     <div class="brain-icon">🧠</div>
-    <h1>Brain Tumor Detection</h1>
+    <div>
+        <div class="app-kicker">EDUCATIONAL MRI ANALYSIS</div>
+        <h1>Brain Tumor Detection</h1>
+    </div>
+    <div class="app-status">● Research demo</div>
 </div>
 <p class="app-subtitle">Upload an MRI scan and choose a model from the sidebar to run the analysis.</p>
 """, unsafe_allow_html=True)
