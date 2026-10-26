@@ -18,6 +18,23 @@ For each task, three models are trained and compared:
 
 All 6 trained models classify an MRI image of **any input resolution** — no manual resizing needed.
 
+## Mobile and protected access
+
+The Streamlit interface is responsive for phones: the sidebar collapses automatically, analysis panels stack vertically, and buttons use touch-friendly sizing. Open the deployed app in a mobile browser and use the browser menu's **Add to Home screen** option to create a convenient launcher.
+
+The app can also be password protected without publishing a password in GitHub. Protection is **off by default** so the public demo remains reachable. To enable it:
+
+1. In Streamlit Community Cloud, open the app's **Settings → Secrets**.
+2. Add a secret in TOML format, replacing the value with your own strong password:
+
+   ```toml
+   APP_ACCESS_PASSWORD = "your-strong-password"
+   ```
+
+3. Save the secret and restart the app when prompted.
+
+For local development, copy [`.streamlit/secrets.toml.example`](.streamlit/secrets.toml.example) to `.streamlit/secrets.toml` and put your password there. The real secrets file is ignored by Git. When protection is enabled, every new browser session needs the password; the **Lock app** button clears the current session.
+
 ## Tumour-Aware Similar-Case Retrieval Module
 
 The **📚 Similar Cases** page has two modes. Its ready-to-use **2D MRI Demo** finds visually similar JPEG/PNG MRI images from either a small public reference library or reference images that you upload. This is a visual research demonstration only; it is not clinical matching, tumour diagnosis, or a treatment recommendation. Its advanced **UPENN-GBM Research** mode includes a one-click, locally generated synthetic-volume demonstration so its complete NIfTI retrieval flow can be inspected before real data are available. With an aligned UPENN-GBM reference index, it instead performs the synopsis's research workflow on four-channel NIfTI MRI volumes and tumour masks.

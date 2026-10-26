@@ -1,3 +1,5 @@
+import hmac
+
 import streamlit as st
 import tensorflow as tf
 from tensorflow.keras import layers, models
@@ -25,8 +27,55 @@ st.set_page_config(
     page_title="Brain Tumor Detection",
     page_icon="🧠",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="auto"
 )
+
+
+# =========================
+# OPTIONAL ACCESS PROTECTION
+# =========================
+# Set APP_ACCESS_PASSWORD in Streamlit secrets to require a password before the
+# app can be used. Keeping the secret unset preserves the public demo mode.
+def get_access_password():
+    """Read the optional app password without exposing it in the UI or repo."""
+    try:
+        value = st.secrets.get("APP_ACCESS_PASSWORD", "")
+    except FileNotFoundError:
+        value = ""
+    return str(value).strip()
+
+
+APP_ACCESS_PASSWORD = get_access_password()
+
+
+def require_app_access():
+    """Show a lightweight password gate when protected mode is configured."""
+    if not APP_ACCESS_PASSWORD or st.session_state.get("app_access_granted"):
+        return True
+
+    st.markdown("## 🔒 Protected access")
+    st.write("Enter the access password to open the Brain Tumor Detection demo.")
+    st.caption(
+        "This is an access control for the educational demo. It does not turn "
+        "the app into a clinical or medical system."
+    )
+
+    with st.form("app_access_form"):
+        supplied_password = st.text_input(
+            "Access password", type="password", autocomplete="current-password"
+        )
+        submitted = st.form_submit_button("Open app", use_container_width=True)
+
+    if submitted:
+        if hmac.compare_digest(supplied_password, APP_ACCESS_PASSWORD):
+            st.session_state["app_access_granted"] = True
+            st.rerun()
+        st.error("Incorrect password. Please try again.")
+    return False
+
+
+if not require_app_access():
+    st.stop()
 
 # =========================
 # THEME / CUSTOM CSS
@@ -150,6 +199,68 @@ st.markdown(f"""
         border-top: 1px solid {CARD_BORDER};
         padding-top: 0.8rem;
         margin-top: 2rem;
+    }}
+
+    /* Phone-first refinements. Streamlit stacks columns below this width, and
+       the rules below keep controls, tabs and results comfortable to tap. */
+    @media (max-width: 768px) {{
+        .block-container {{
+            max-width: none;
+            padding: 1.1rem 0.9rem 2.5rem;
+        }}
+        section[data-testid="stSidebar"] {{
+            min-width: min(84vw, 360px);
+        }}
+        .app-header {{
+            gap: 0.55rem;
+            margin-bottom: 0.35rem;
+        }}
+        .app-header .brain-icon {{
+            font-size: 2.05rem;
+        }}
+        .app-header h1 {{
+            font-size: 1.7rem;
+            line-height: 1.15;
+        }}
+        .app-subtitle {{
+            font-size: 0.95rem;
+            margin-bottom: 1.1rem;
+        }}
+        .app-card {{
+            border-radius: 13px;
+            padding: 1rem;
+        }}
+        .result-card {{
+            border-radius: 13px;
+            padding: 1.1rem;
+        }}
+        .result-value {{
+            font-size: 1.55rem;
+        }}
+        div[data-testid="stHorizontalBlock"] {{
+            gap: 0.85rem;
+        }}
+        div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {{
+            min-width: 100%;
+            width: 100%;
+            flex: 1 1 100%;
+        }}
+        .stTabs [data-baseweb="tab-list"] {{
+            gap: 0.15rem;
+            overflow-x: auto;
+            scrollbar-width: none;
+        }}
+        .stTabs [data-baseweb="tab"] {{
+            font-size: 0.86rem;
+            padding: 0.7rem 0.6rem;
+            white-space: nowrap;
+        }}
+        .stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] > button {{
+            min-height: 44px;
+        }}
+        div[data-testid="stFileUploader"] {{
+            padding: 0.7rem;
+        }}
     }}
 </style>
 """, unsafe_allow_html=True)
@@ -631,6 +742,10 @@ def show_tumor_type(
 # =========================
 with st.sidebar:
     st.markdown("### ⚙️ Select Model")
+    if APP_ACCESS_PASSWORD:
+        if st.button("🔒 Lock app", use_container_width=True):
+            st.session_state.pop("app_access_granted", None)
+            st.rerun()
     selected_model = st.selectbox(
         "Choose Model",
         list(MODEL_INFO.keys()),
