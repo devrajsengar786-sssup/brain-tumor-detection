@@ -1,6 +1,7 @@
 import hmac
 
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 import tensorflow as tf
 from tensorflow.keras import layers, models
 from tensorflow.keras.applications.resnet50 import ResNet50, preprocess_input as resnet50_preprocess
@@ -40,7 +41,7 @@ def get_access_password():
     """Read the optional app password without exposing it in the UI or repo."""
     try:
         value = st.secrets.get("APP_ACCESS_PASSWORD", "")
-    except FileNotFoundError:
+    except (FileNotFoundError, StreamlitSecretNotFoundError):
         value = ""
     return str(value).strip()
 
