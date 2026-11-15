@@ -50,6 +50,16 @@ The module currently provides:
 
 This is a research prototype, not a diagnostic system. Similar cases are not clinically equivalent patients, and a Grad-CAM attention map is not a segmentation mask. A formal experiment still requires the UPENN-GBM dataset, a trained/validated segmentation model, a relevance protocol set before evaluation, and GPU training.
 
+### Real UPENN-GBM gallery (milestone 1)
+
+The **🧪 UPENN-GBM Research** tab searches a real reference gallery built from the 147 UPENN-GBM baseline cases that have all four sequences and an expert tumour mask. The build runs in **Google Colab**, so the raw scans (about 1.6 GB) never touch your machine:
+
+1. Open [`notebooks/upenn_gbm_gallery_colab.ipynb`](notebooks/upenn_gbm_gallery_colab.ipynb) in Colab and run all cells. It inventories the individual-file mirror, downloads resumably to the Colab VM, validates every case, checks the metadata join, splits **by patient** (70% gallery / 15% validation / 15% test), and writes `gallery_bundle.zip` to Google Drive.
+2. Unzip the bundle into `artifacts/gallery_bundle/` (git-ignored), or set `GALLERY_BUNDLE_DIR` (a folder) or `GALLERY_BUNDLE_URL` (a zip link) as an environment variable or Streamlit secret.
+3. Run `streamlit run app.py` → **📚 Similar Cases → 🧪 UPENN-GBM Research**. Choose the built-in held-out demo query, or upload one examination (a zip or five NIfTI files: T1, T1-Gd, T2, FLAIR and a subregion mask). Retrieval runs automatically and shows the Top-K cases with previews and the features that made each match close or far.
+
+Ranking uses only image-derived shape, location and intensity features. They are z-scored with statistics fitted on the gallery, and compared with a weighted standardised Euclidean distance. Molecular markers and outcomes are kept out of ranking and used only for secondary evaluation. Design decisions, the audit fixes and the open items are in [`docs/upenn_gbm_retrieval.md`](docs/upenn_gbm_retrieval.md).
+
 ### Retrieval setup
 
 The standard app dependencies are enough for the 2D MRI Demo. After starting the app, open **📚 Similar Cases**, choose **2D MRI Demo**, press **Load public reference library**, upload one MRI as the query, and select **Find visually similar MRIs**. You can instead upload two or more of your own reference MRI images. The public sample's source labels are only `Tumor` and `No Tumor`; they are shown as dataset labels and are not a diagnosis. In **🧪 UPENN-GBM Research**, select **Run built-in synthetic retrieval demo** to verify the full research pipeline using generated non-patient volumes; it is not a clinical or research result.
@@ -89,7 +99,7 @@ Once the index exists, start `streamlit run app.py`, open **📚 Similar Cases**
 For a held-out retrieval evaluation, predefine reference relevance (for example from a frozen imaging-characteristic protocol or blinded expert review) in a JSON mapping such as [`data/relevance.example.json`](data/relevance.example.json), then run:
 
 ```bash
-python -m retrieval.cli evaluate --reference-features artifacts/retrieval/engineered_baseline/engineered_features.csv --query-features artifacts/retrieval/test_features.csv --relevance data/relevance.json --output artifacts/retrieval/held_out_metrics.csv
+python -m retrieval.cli evaluate --reference-features artifacts/retrieval/engineered_baseline/gallery_features.csv --query-features artifacts/retrieval/test_features.csv --relevance data/relevance.json --output artifacts/retrieval/held_out_metrics.csv
 ```
 
 ## Project Structure
@@ -99,6 +109,9 @@ python -m retrieval.cli evaluate --reference-features artifacts/retrieval/engine
 | `brain_tumor_detection.ipynb` | Trains, evaluates, saves, and uploads all 6 models |
 | `app.py` | Streamlit demo — upload a scan, pick a model, see a live prediction |
 | `requirements.txt` | Dependencies for the notebook |
+| `notebooks/upenn_gbm_gallery_colab.ipynb` | Colab build of the real UPENN-GBM retrieval gallery bundle |
+| `retrieval/` | Retrieval package: mirror inventory/download, validation, features, index, bundle, Streamlit UI |
+| `docs/upenn_gbm_retrieval.md` | Design notes for the 3D retrieval baseline |
 | `assets/` | Training-curve and confusion-matrix images used by the app's Model Comparison tab |
 
 Trained models are hosted on Hugging Face Hub: **[mvdu/brain-tumor-models](https://huggingface.co/mvdu/brain-tumor-models)** — `app.py` downloads them automatically at runtime, so no large `.h5` files are bundled in this repo.

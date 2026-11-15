@@ -18,6 +18,28 @@ def _safe_case_id(case_id: str) -> str:
     return sanitized
 
 
+def _label_map(records) -> dict[str, int]:
+    """
+    nnU-Net requires every label value in the masks to be declared and consecutive.
+    The UPENN-GBM mirror uses 1 necrotic core, 2 oedema, 3 enhancing tumour; the
+    earlier version declared only {background, tumor=1}, which nnU-Net rejects for
+    these masks. Masks using BraTS label 4 must be relabelled 4 -> 3 first.
+    """
+    import nibabel as nib
+    import numpy as np
+
+    present: set[int] = set()
+    for record in records:
+        present |= {int(v) for v in np.unique(np.asanyarray(nib.load(str(record.mask_path)).dataobj))}
+    if present <= {0, 1}:
+        return {"background": 0, "tumor": 1}
+    if 4 in present:
+        raise ManifestError("Masks contain label 4; relabel enhancing tumour 4 -> 3 before nnU-Net conversion.")
+    if not present <= {0, 1, 2, 3}:
+        raise ManifestError(f"Unsupported mask labels for nnU-Net: {sorted(present)}")
+    return {"background": 0, "necrotic_core": 1, "edema": 2, "enhancing_tumor": 3}
+
+
 def prepare_nnunet_dataset(
     manifest_path: str | Path,
     raw_root: str | Path,
@@ -46,6 +68,7 @@ def prepare_nnunet_dataset(
     images_directory.mkdir(parents=True, exist_ok=False)
     labels_directory.mkdir(parents=True, exist_ok=False)
 
+    labels = _label_map(records)
     used_case_ids: set[str] = set()
     for record in records:
         case_id = _safe_case_id(record.case_id)
@@ -59,7 +82,7 @@ def prepare_nnunet_dataset(
 
     dataset_json = {
         "channel_names": {str(index): modality.upper() for index, modality in enumerate(MODALITY_COLUMNS)},
-        "labels": {"background": 0, "tumor": 1},
+        "labels": labels,
         "numTraining": len(records),
         "file_ending": ".nii.gz",
     }

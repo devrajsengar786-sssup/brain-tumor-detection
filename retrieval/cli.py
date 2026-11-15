@@ -53,6 +53,13 @@ def build_parser() -> argparse.ArgumentParser:
     query.add_argument("--mask", required=True, type=Path, help="Mask from the trained segmentation model, aligned to the query MRI.")
     query.add_argument("--top-k", type=int, default=5)
 
+    upenn = subparsers.add_parser("build-upenn-bundle", help="Inventory, download, validate and export the UPENN-GBM gallery bundle.")
+    upenn.add_argument("--raw-dir", required=True, type=Path, help="Where raw mirror files are cached (keep outside Git).")
+    upenn.add_argument("--out", required=True, type=Path, help="Output folder for the gallery bundle.")
+    upenn.add_argument("--participants", type=Path, help="participants.tsv (downloaded from the mirror if omitted).")
+    upenn.add_argument("--seed", type=int, default=42)
+    upenn.add_argument("--skip-download", action="store_true")
+
     evaluate = subparsers.add_parser("evaluate", help="Calculate held-out Precision@K, Recall@K, and mAP@K.")
     evaluate.add_argument("--reference-features", required=True, type=Path)
     evaluate.add_argument("--query-features", required=True, type=Path)
@@ -97,6 +104,18 @@ def main() -> None:
             print(f"  {name}: {value:.6f}")
         print("\nTop similar reference cases:")
         print(results.to_string(index=False))
+    elif args.command == "build-upenn-bundle":
+        from .experiment import build_upenn_gallery
+        from .upenn import DOWNLOAD_BASE, build_inventory, download_file, download_inventory, fetch_release_assets, read_participants
+
+        assets = fetch_release_assets()
+        inventory = build_inventory(assets)
+        participants_path = args.participants or args.raw_dir / "participants.tsv"
+        if not participants_path.is_file():
+            download_file(f"{DOWNLOAD_BASE}/participants.tsv", participants_path)
+        report = None if args.skip_download else download_inventory(inventory, args.raw_dir)
+        manifest = build_upenn_gallery(inventory, read_participants(participants_path), args.raw_dir, args.out, report, seed=args.seed)
+        print(json.dumps(manifest["counts"], indent=2))
     elif args.command == "evaluate":
         reference_features = pd.read_csv(args.reference_features, index_col="case_id")
         query_features = pd.read_csv(args.query_features, index_col="case_id")
