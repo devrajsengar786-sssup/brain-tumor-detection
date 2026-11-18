@@ -1,0 +1,15 @@
+# Colours used by Streamlit's own widgets (uploader, buttons, segmented control).
+# The rest of the visual design is in assets/app.css; keep the two palettes in step.
+[theme]
+base = "light"
+primaryColor = "#1E63B5"
+backgroundColor = "#F4F6F8"
+secondaryBackgroundColor = "#F8FAFB"
+textColor = "#101828"
+font = "sans-serif"
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+maxUploadSize = 20
