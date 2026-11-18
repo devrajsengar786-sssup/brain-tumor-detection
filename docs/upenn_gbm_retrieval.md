@@ -1,5 +1,10 @@
 # UPENN-GBM similar-case retrieval: milestone 1 design notes
 
+> **Scope of this document.** These notes describe the earlier **3D research baseline** (four NIfTI sequences plus a
+> supplied tumour mask). It is not the workflow of the current app. The current app takes one JPG/PNG slice and searches
+> a 2D gallery; see the main `README.md`. The 3D baseline's output bundle is still used as the *input* to that gallery
+> (`python -m retrieval.gallery2d prepare`). Its Streamlit research tab (`retrieval/ui.py`) is not linked from `app.py`.
+
 This note covers what the real-data baseline does, why each decision was made, and what is still open.
 The code is in `retrieval/`, the cloud build is `notebooks/upenn_gbm_gallery_colab.ipynb`, and the
 tests are in `tests/`.

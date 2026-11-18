@@ -17,3 +17,13 @@ tmp/
 *.nii.gz
 gallery_bundle*.zip
 retrieval_code.zip
+
+# Notebook checkpoints, logs and OS/editor clutter.
+.ipynb_checkpoints/
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+.env
