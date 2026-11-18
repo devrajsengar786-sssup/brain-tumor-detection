@@ -11,3 +11,9 @@ nnunet_raw/
 nnunet_preprocessed/
 nnunet_results/
 tmp/
+
+# Raw scans, bundles and local caches must never be committed.
+*.nii
+*.nii.gz
+gallery_bundle*.zip
+retrieval_code.zip

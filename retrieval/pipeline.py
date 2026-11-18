@@ -55,12 +55,12 @@ def build_engineered_reference_database(
 
     output_directory = Path(output_directory)
     output_directory.mkdir(parents=True, exist_ok=True)
-    features.to_csv(output_directory / "engineered_features.csv")
     metadata.to_csv(output_directory / "reference_manifest.csv")
     with (output_directory / "database_metadata.json").open("w", encoding="utf-8") as stream:
         json.dump(
             {
-                "representation": "engineered_morphology_and_intensity_baseline",
+                "representation": "engineered_shape_location_intensity_baseline",
+                "scaling": "z-score fitted on the reference split only",
                 "reference_split": reference_split,
                 "case_count": len(features),
                 "feature_columns": features.columns.tolist(),
@@ -68,7 +68,8 @@ def build_engineered_reference_database(
             stream,
             indent=2,
         )
-    return index.save(output_directory)
+    index.save(output_directory)
+    return output_directory
 
 
 def query_engineered_reference_database(
@@ -81,5 +82,10 @@ def query_engineered_reference_database(
     query_features = pd.DataFrame(
         [{"case_id": query_record.case_id, **extract_engineered_features(load_case(query_record))}]
     ).set_index("case_id")
-    results = index.query(query_features, top_k=top_k, exclude_case_id=query_record.case_id)
+    results = index.query(
+        query_features,
+        top_k=top_k,
+        exclude_case_id=query_record.case_id,
+        exclude_patient_id=query_record.patient_id,
+    )
     return results, query_features.iloc[0].to_dict()

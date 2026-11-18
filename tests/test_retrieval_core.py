@@ -33,7 +33,9 @@ class RetrievalWorkflowTests(unittest.TestCase):
             row[modality] = str(path)
         mask = np.zeros(shape, dtype=np.uint8)
         start = 3 + (number % 3)
-        mask[start : start + 4, 5:9, 6:10] = 1
+        mask[start : start + 4, 5:9, 6:10] = 2  # oedema
+        mask[start + 1 : start + 3, 6:8, 7:9] = 3  # enhancing tumour
+        mask[start + 1, 6, 7] = 1  # necrotic core
         mask_path = root / f"{case_id}_mask.nii.gz"
         nib.save(nib.Nifti1Image(mask, affine), mask_path)
         row["mask_path"] = str(mask_path)
@@ -60,7 +62,7 @@ class RetrievalWorkflowTests(unittest.TestCase):
             self.assertFalse(results.empty)
             self.assertIn("similarity", results.columns)
 
-            self.assertGreater(query_features["morph_volume_ml"], 0)
+            self.assertGreater(query_features["shape_log_volume_ml"], 0)
 
             reference_records = [record for record in split_records if record.split == "train"]
             reference_features = pd.DataFrame(
@@ -69,8 +71,8 @@ class RetrievalWorkflowTests(unittest.TestCase):
                     for record in reference_records
                 ]
             ).set_index("case_id")
-            morphology_columns = [column for column in reference_features.columns if column.startswith("morph_")]
-            intensity_columns = [column for column in reference_features.columns if column.startswith("flair_")]
+            morphology_columns = [column for column in reference_features.columns if column.startswith("shape_")]
+            intensity_columns = [column for column in reference_features.columns if column.startswith("intensity_flair_")]
             fuser = FittedFuser.fit(
                 {
                     "morphology": reference_features[morphology_columns],
@@ -106,7 +108,7 @@ class RetrievalWorkflowTests(unittest.TestCase):
 
         self.assertEqual(len(results), 3)
         self.assertEqual(results.iloc[0]["case_id"], "synthetic-reference-a")
-        self.assertIn("morph_volume_ml", query_features)
+        self.assertIn("shape_log_volume_ml", query_features)
         self.assertEqual(query_preview.shape[-1], 3)
         self.assertEqual(len(reference_previews), 3)
 

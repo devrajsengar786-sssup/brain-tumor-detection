@@ -1,74 +1,63 @@
+"""Brain MRI Analysis - one upload, one page.
+
+Upload a JPG/PNG slice and the page shows, in order: the detector's result and
+confidence, the predicted tumour type, the Grad-CAM overlay, and the closest
+reference cases with a side-by-side comparison and documented details.
+
+Layout: an application header, then a two-panel workspace (Scan | Results), then
+the Similar cases and Comparison panels. Styling lives in ``assets/app.css``;
+Streamlit's own widget colours are in ``.streamlit/config.toml``.
+"""
+
+from __future__ import annotations
+
+import runtime_limits  # noqa: F401  (must run before numpy/TensorFlow are imported)
+
+import base64
+import hashlib
 import hmac
+import html
+import io
+import os
+import time
+from pathlib import Path
 
-import streamlit as st
-from streamlit.errors import StreamlitSecretNotFoundError
-import tensorflow as tf
-from tensorflow.keras import layers, models
-from tensorflow.keras.applications.resnet50 import ResNet50, preprocess_input as resnet50_preprocess
 import numpy as np
-import pandas as pd
-from PIL import Image
-import cv2
-import imutils
-import h5py
-from huggingface_hub import hf_hub_download
+import streamlit as st
+from PIL import Image, UnidentifiedImageError
+from streamlit.errors import StreamlitSecretNotFoundError
 
-# =========================
-# HUGGING FACE MODEL REPO
-# =========================
-# All 6 .h5 files are downloaded from this repo instead of being bundled
-# in the GitHub repo (keeps the repo small, and models can be updated by
-# re-uploading to HF without redeploying the app).
-HF_REPO_ID = "mvdu/brain-tumor-models"  
+APP_DIR = Path(__file__).parent
+MAX_IMAGE_PIXELS = 4096 * 4096
+MIN_IMAGE_SIDE = 32
+VIEWER_MAX_SIDE = 1024  # display copies are downscaled; analysis always uses the full image
+TOP_K = 5
 
-# =========================
-# PAGE CONFIG
-# =========================
-st.set_page_config(
-    page_title="Brain Tumor Detection",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="auto"
-)
+st.set_page_config(page_title="Brain MRI Analysis", layout="wide", initial_sidebar_state="collapsed")
+st.markdown(f"<style>{(APP_DIR / 'assets' / 'app.css').read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
 
 
-# =========================
-# OPTIONAL ACCESS PROTECTION
-# =========================
-# Set APP_ACCESS_PASSWORD in Streamlit secrets to require a password before the
-# app can be used. Keeping the secret unset preserves the public demo mode.
-def get_access_password():
-    """Read the optional app password without exposing it in the UI or repo."""
+# --------------------------------------------------------------------------- access gate
+def _secret(name: str) -> str:
     try:
-        value = st.secrets.get("APP_ACCESS_PASSWORD", "")
+        return str(st.secrets.get(name, "")).strip()
     except (FileNotFoundError, StreamlitSecretNotFoundError):
-        value = ""
-    return str(value).strip()
+        return ""
 
 
-APP_ACCESS_PASSWORD = get_access_password()
+APP_ACCESS_PASSWORD = _secret("APP_ACCESS_PASSWORD")
 
 
-def require_app_access():
-    """Show a lightweight password gate when protected mode is configured."""
+def require_app_access() -> bool:
+    """Optional password gate; unset keeps the public demo mode."""
     if not APP_ACCESS_PASSWORD or st.session_state.get("app_access_granted"):
         return True
-
-    st.markdown("## 🔒 Protected access")
-    st.write("Enter the access password to open the Brain Tumor Detection demo.")
-    st.caption(
-        "This is an access control for the educational demo. It does not turn "
-        "the app into a clinical or medical system."
-    )
-
+    st.markdown('<div class="app-header"><div class="app-title">Brain MRI Analysis</div></div>', unsafe_allow_html=True)
     with st.form("app_access_form"):
-        supplied_password = st.text_input(
-            "Access password", type="password", autocomplete="current-password"
-        )
-        submitted = st.form_submit_button("Open app", use_container_width=True)
-
+        supplied = st.text_input("Access password", type="password", autocomplete="current-password")
+        submitted = st.form_submit_button("Open app", type="primary")
     if submitted:
-        if hmac.compare_digest(supplied_password, APP_ACCESS_PASSWORD):
+        if hmac.compare_digest(supplied, APP_ACCESS_PASSWORD):
             st.session_state["app_access_granted"] = True
             st.rerun()
         st.error("Incorrect password. Please try again.")
@@ -78,907 +67,449 @@ def require_app_access():
 if not require_app_access():
     st.stop()
 
-# =========================
-# THEME / CUSTOM CSS
-# =========================
-PRIMARY = "#a78bfa"       # soft violet - main accent
-PRIMARY_DARK = "#7c3aed"
-BG_DARK = "#0f1117"
-CARD_BG = "#1a1d29"
-CARD_BORDER = "#2d2f3f"
-GREEN = "#4ade80"
-RED = "#f87171"
-TEXT_MUTED = "#9ca3af"
 
-st.markdown(f"""
-<style>
-    .stApp {{
-        background-color: {BG_DARK};
-    }}
+# --------------------------------------------------------------------------- cached resources
+@st.cache_resource(show_spinner=False)
+def get_models():
+    from inference import ModelSet
 
-    /* Sidebar */
-    section[data-testid="stSidebar"] {{
-        background-color: {CARD_BG};
-        border-right: 1px solid {CARD_BORDER};
-    }}
-
-    /* Generic card */
-    .app-card {{
-        background-color: {CARD_BG};
-        border: 1px solid {CARD_BORDER};
-        border-radius: 16px;
-        padding: 1.5rem;
-        margin-bottom: 1rem;
-    }}
-
-    .app-card h4 {{
-        margin-top: 0;
-        color: {PRIMARY};
-    }}
-
-    /* Header */
-    .app-header {{
-        display: flex;
-        align-items: center;
-        gap: 0.8rem;
-        margin-bottom: 0.2rem;
-    }}
-    .app-header .brain-icon {{
-        font-size: 2.6rem;
-        filter: drop-shadow(0 0 12px rgba(167, 139, 250, 0.5));
-    }}
-    .app-header h1 {{
-        margin: 0;
-        background: linear-gradient(90deg, {PRIMARY} 0%, #60a5fa 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-size: 2.1rem;
-    }}
-    .app-subtitle {{
-        color: {TEXT_MUTED};
-        margin-top: 0;
-        margin-bottom: 1.5rem;
-    }}
-
-    /* Result cards */
-    .result-card {{
-        border-radius: 16px;
-        padding: 1.6rem 1.8rem;
-        margin-top: 1rem;
-        border: 1px solid;
-    }}
-    .result-card.tumor {{
-        background-color: rgba(248, 113, 113, 0.08);
-        border-color: {RED};
-    }}
-    .result-card.no-tumor {{
-        background-color: rgba(74, 222, 128, 0.08);
-        border-color: {GREEN};
-    }}
-    .result-label {{
-        font-size: 0.85rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: {TEXT_MUTED};
-        margin-bottom: 0.3rem;
-    }}
-    .result-value {{
-        font-size: 1.8rem;
-        font-weight: 700;
-    }}
-    .result-value.tumor {{ color: {RED}; }}
-    .result-value.no-tumor {{ color: {GREEN}; }}
-
-    /* Sidebar model info card */
-    .sidebar-info {{
-        background-color: rgba(167, 139, 250, 0.08);
-        border: 1px solid {PRIMARY_DARK};
-        border-radius: 12px;
-        padding: 1rem;
-        margin-top: 0.8rem;
-    }}
-    .sidebar-info .metric-row {{
-        display: flex;
-        justify-content: space-between;
-        margin: 0.3rem 0;
-        font-size: 0.9rem;
-    }}
-    .sidebar-info .metric-label {{ color: {TEXT_MUTED}; }}
-    .sidebar-info .metric-val {{ color: {PRIMARY}; font-weight: 600; }}
-
-    /* Uploader area */
-    div[data-testid="stFileUploader"] {{
-        border: 2px dashed {CARD_BORDER};
-        border-radius: 16px;
-        padding: 1rem;
-        background-color: {CARD_BG};
-    }}
-
-    .disclaimer {{
-        color: {TEXT_MUTED};
-        font-size: 0.8rem;
-        border-top: 1px solid {CARD_BORDER};
-        padding-top: 0.8rem;
-        margin-top: 2rem;
-    }}
-
-    /* Phone-first refinements. Streamlit stacks columns below this width, and
-       the rules below keep controls, tabs and results comfortable to tap. */
-    @media (max-width: 768px) {{
-        .block-container {{
-            max-width: none;
-            padding: 1.1rem 0.9rem 2.5rem;
-        }}
-        section[data-testid="stSidebar"] {{
-            min-width: min(84vw, 360px);
-        }}
-        .app-header {{
-            gap: 0.55rem;
-            margin-bottom: 0.35rem;
-        }}
-        .app-header .brain-icon {{
-            font-size: 2.05rem;
-        }}
-        .app-header h1 {{
-            font-size: 1.7rem;
-            line-height: 1.15;
-        }}
-        .app-subtitle {{
-            font-size: 0.95rem;
-            margin-bottom: 1.1rem;
-        }}
-        .app-card {{
-            border-radius: 13px;
-            padding: 1rem;
-        }}
-        .result-card {{
-            border-radius: 13px;
-            padding: 1.1rem;
-        }}
-        .result-value {{
-            font-size: 1.55rem;
-        }}
-        div[data-testid="stHorizontalBlock"] {{
-            gap: 0.85rem;
-        }}
-        div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {{
-            min-width: 100%;
-            width: 100%;
-            flex: 1 1 100%;
-        }}
-        .stTabs [data-baseweb="tab-list"] {{
-            gap: 0.15rem;
-            overflow-x: auto;
-            scrollbar-width: none;
-        }}
-        .stTabs [data-baseweb="tab"] {{
-            font-size: 0.86rem;
-            padding: 0.7rem 0.6rem;
-            white-space: nowrap;
-        }}
-        .stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] > button {{
-            min-height: 44px;
-        }}
-        div[data-testid="stFileUploader"] {{
-            padding: 0.7rem;
-        }}
-    }}
-</style>
-""", unsafe_allow_html=True)
-
-# =========================
-# MODEL METADATA
-# (accuracy values computed directly from each model's confusion matrix on
-#  the held-out validation set — from the final training run in
-#  brain_tumor_detection.ipynb. val_loss for MultiClass models is read from
-#  the final epoch of the training curves; val_loss for Binary models isn't
-#  available as no training-curve chart was exported for that section, so
-#  it's left as None and hidden in the UI rather than guessed.)
-# =========================
-MODEL_INFO = {
-    "Binary - VGG16": {
-        "file": "binary_vgg16.h5",
-        "task": "Binary",
-        "architecture": "VGG16 (Transfer Learning, frozen ImageNet base)",
-        "img_size": (224, 224),
-        "accuracy": 97.83,
-        "val_loss": 0.08,
-        "dataset": "akar49/MRI_Classification (Hugging Face) — notumor/tumor, ~3.6k images, 80/20 split, dedup-checked",
-        "chart_type": "history",
-        "history_chart": "assets/vgg16_b1.png",
-        "confusion_chart": "assets/vgg16_b.png",
-    },
-    "Binary - Custom CNN": {
-        "file": "binary_custom_cnn.h5",
-        "task": "Binary",
-        "architecture": "Custom 3-block CNN (trained from scratch, class-weighted)",
-        "img_size": (224, 224),
-        "accuracy": 96.43,
-        "val_loss": 0.10,
-        "dataset": "akar49/MRI_Classification (Hugging Face) — notumor/tumor, ~3.6k images, 80/20 split, dedup-checked",
-        "chart_type": "history",
-        "history_chart": "assets/cnn_b1.png",
-        "confusion_chart": "assets/cnn_b.png",
-    },
-    "Binary - ResNet50": {
-        "file": "binary_resnet50.h5",
-        "task": "Binary",
-        "architecture": "ResNet50 (fine-tuned, last 10 layers unfrozen)",
-        "img_size": (224, 224),
-        "accuracy": 99.07,
-        "val_loss": 0.04,
-        "dataset": "akar49/MRI_Classification (Hugging Face) — notumor/tumor, ~3.6k images, 80/20 split, dedup-checked",
-        "chart_type": "history",
-        "history_chart": "assets/resnet50_b1.png",
-        "confusion_chart": "assets/resnet50_b.png",
-    },
-    "MultiClass - Custom CNN": {
-        "file": "multiclass_custom_cnn.h5",
-        "task": "MultiClass",
-        "architecture": "Custom 3-block CNN (trained from scratch, augmented)",
-        "img_size": (128, 128),
-        "accuracy": 71.04,
-        "val_loss": 0.72,
-        "dataset": "masoudnickparvar/brain-tumor-mri-dataset (Kaggle) — 4 classes, dynamically balanced, Training+Testing merged",
-        "chart_type": "history",
-        "history_chart": "assets/cnn_m.png",
-        "confusion_chart": "assets/cnn_m1.png",
-    },
-    "MultiClass - ResNet50": {
-        "file": "multiclass_resnet50.h5",
-        "task": "MultiClass",
-        "architecture": "ResNet50 (fine-tuned, last 10 layers unfrozen)",
-        "img_size": (128, 128),
-        "accuracy": 96.18,
-        "val_loss": 0.15,
-        "dataset": "masoudnickparvar/brain-tumor-mri-dataset (Kaggle) — 4 classes, dynamically balanced, Training+Testing merged",
-        "chart_type": "history",
-        "history_chart": "assets/resnet50_m.png",
-        "confusion_chart": "assets/resnet50_m1.png",
-    },
-    "MultiClass - VGG16": {
-        "file": "multiclass_vgg16.h5",
-        "task": "MultiClass",
-        "architecture": "VGG16 (Transfer Learning, frozen ImageNet base)",
-        "img_size": (128, 128),
-        "accuracy": 83.19,
-        "val_loss": 0.49,
-        "dataset": "masoudnickparvar/brain-tumor-mri-dataset (Kaggle) — 4 classes, dynamically balanced, Training+Testing merged",
-        "chart_type": "history",
-        "history_chart": "assets/vgg16_m.png",
-        "confusion_chart": "assets/vgg16_m1.png",
-    },
-}
-
-binary_classes = ["No Tumor", "Tumor"]
-multiclass_names = ["Healthy", "Glioma", "Meningioma", "Pituitary"]
-# Used as the automatic second-stage classifier when a binary model predicts Tumor.
-# ResNet50 has the strongest recorded multi-class validation result in MODEL_INFO.
-DEFAULT_TYPE_MODEL = "MultiClass - ResNet50"
-
-# The multi-class models were trained only to distinguish these broad image
-# categories. These descriptions are educational context, not diagnoses.
-TUMOR_TYPE_INFO = {
-    "Glioma": {
-        "summary": "Gliomas are a group of tumours that form in glial cells, which support and protect nerve cells in the central nervous system.",
-    },
-    "Meningioma": {
-        "summary": "Meningiomas form in the meninges, the thin layers of tissue that cover the brain and spinal cord.",
-    },
-    "Pituitary": {
-        "summary": "Pituitary tumours are growths of abnormal cells in the pituitary gland, a hormone-producing gland at the base of the brain.",
-    },
-}
-
-# =========================
-# LOAD MODEL
-# =========================
-@st.cache_resource
-def build_binary_resnet50_architecture():
-    """
-    Rebuilds the exact ResNet50 Binary architecture from the training
-    notebook, in native Python code. Used instead of loading the full
-    .h5 file for this specific model, because it contains a Lambda layer
-    whose function was pickled on a different machine/Python version —
-    unpickling that across mismatched Python versions can hard-crash the
-    process rather than raise a catchable error. Defining the Lambda's
-    function natively here sidesteps that entirely; we only load the
-    trained numeric weights from the .h5 file afterwards.
-
-    Layer names below are hardcoded to match the exact names stored
-    inside binary_resnet50.h5 (verified with inspect_resnet50.py), so
-    load_weights_manually() below matches every layer correctly regardless
-    of Keras's auto-naming counters in this session.
-    """
-    resnet50_base_model = ResNet50(
-        weights=None, include_top=False, input_shape=(224, 224, 3)
-    )
-    return models.Sequential([
-        layers.Lambda(
-            lambda pixel_values: resnet50_preprocess(pixel_values * 255.0),
-            input_shape=(224, 224, 3),
-            name="lambda"
-        ),
-        resnet50_base_model,  # default name is already "resnet50"
-        layers.GlobalAveragePooling2D(name="global_average_pooling2d_5"),
-        layers.Dense(256, activation='relu', name="dense_10"),
-        layers.Dropout(0.4, name="dropout_5"),
-        layers.Dense(1, activation='sigmoid', name="dense_11")
-    ], name='ResNet50_BrainTumor')
+    return ModelSet.load()
 
 
-@st.cache_resource
-def build_multiclass_resnet50_architecture():
-    """
-    Same idea as build_binary_resnet50_architecture() above, but for
-    multiclass_resnet50.h5. The updated training notebook now fine-tunes
-    the last 10 layers of ResNet50 AND adds the same kind of Lambda
-    preprocessing layer for the multi-class task (previously it was fully
-    frozen with no Lambda layer) — so this model is now exposed to the
-    exact same Lambda-unpickling risk described above.
-
-    ⚠️ Layer names below were verified with inspect_h5_model.py against the
-    actual trained multiclass_resnet50.h5 — these are the real names, not
-    placeholders.
-    """
-    resnet50_base_model = ResNet50(
-        weights=None, include_top=False, input_shape=(128, 128, 3)
-    )
-    return models.Sequential([
-        layers.Lambda(
-            lambda pixel_values: resnet50_preprocess(pixel_values * 255.0),
-            input_shape=(128, 128, 3),
-            name="lambda_1"
-        ),
-        resnet50_base_model,                                              # default name "resnet50"
-        layers.GlobalAveragePooling2D(name="global_average_pooling2d_4"),
-        layers.Dense(256, activation='relu', name="dense_8"),
-        layers.Dropout(0.4, name="dropout_4"),
-        layers.Dense(4, activation='softmax', name="dense_9")
-    ], name='MC_ResNet50')
+def gallery_directory() -> Path:
+    return Path(os.environ.get("GALLERY_2D_DIR") or _secret("GALLERY_2D_DIR") or APP_DIR / "artifacts" / "gallery_2d")
 
 
-def _find_weights_group(h5_group, target_layer_name):
-    """
-    Given an h5py group that should contain a layer's weight datasets,
-    find the subgroup that actually holds them -- handling the extra
-    nesting level some Keras saves add (e.g. dense_10/ResNet50_BrainTumor/
-    dense_10/{kernel,bias} instead of just dense_10/{kernel,bias}).
-    """
-    for key in h5_group.keys():
-        if isinstance(h5_group[key], h5py.Dataset):
-            return h5_group
+@st.cache_resource(show_spinner=False)
+def _load_gallery(directory: str, stamp: float):
+    from retrieval.gallery2d import Gallery2D
 
-    if target_layer_name in h5_group and isinstance(h5_group[target_layer_name], h5py.Group):
-        result = _find_weights_group(h5_group[target_layer_name], target_layer_name)
-        if result is not None:
-            return result
-
-    for key in h5_group.keys():
-        sub = h5_group[key]
-        if isinstance(sub, h5py.Group):
-            result = _find_weights_group(sub, target_layer_name)
-            if result is not None:
-                return result
-    return None
+    return Gallery2D.load(directory)  # TensorFlow-free, so the empty state appears at once
 
 
-def _set_layer_weights_by_name(layer, h5_layer_group):
-    """Load one layer's weights, matching each weight dataset by its exact name."""
-    if not layer.weights:
-        return
-    weights_group = _find_weights_group(h5_layer_group, layer.name)
-    if weights_group is None:
-        return
-    values = []
-    for w in layer.weights:
-        weight_name = w.name.split("/")[-1].split(":")[0]
-        if weight_name not in weights_group:
-            raise KeyError(
-                f"Weight '{weight_name}' not found for layer '{layer.name}'"
-            )
-        values.append(weights_group[weight_name][()])
-    layer.set_weights(values)
+def get_gallery():
+    """Return (gallery, None) or (None, reason). The reason is safe to show to the user."""
+    from retrieval.gallery2d import Gallery2DError
 
-
-def load_weights_manually(model, h5_path):
-    """
-    Walks model_weights/<layer_name>/... in the h5 file and assigns weights
-    to each layer (including sub-layers of nested Functional models) by
-    matching exact weight names.
-
-    We use this instead of Keras's `model.load_weights(path, by_name=True)`
-    because that call is unreliable here: the ResNet50 base is nested
-    inside a Sequential model, and Keras's legacy by_name loader does not
-    correctly recurse into that nested Functional sub-model -- it ends up
-    matching weights by position instead of by name for the inner layers,
-    silently assigning the wrong weight array to the wrong layer (or, if
-    shapes happen to differ, raising a "Shape mismatch" ValueError like:
-    "Weight expects shape (7, 7, 3, 64). Received saved weight with shape
-    (1, 1, 2048, 512)"). Matching by exact name at every level avoids this
-    entirely.
-    """
-    with h5py.File(h5_path, "r") as f:
-        model_weights_root = f["model_weights"]
-        for layer in model.layers:
-            if layer.name not in model_weights_root:
-                continue
-            layer_group = model_weights_root[layer.name]
-            if hasattr(layer, "layers"):  # nested Functional/Sequential sub-model
-                for sublayer in layer.layers:
-                    if sublayer.name in layer_group:
-                        _set_layer_weights_by_name(sublayer, layer_group[sublayer.name])
-            else:
-                _set_layer_weights_by_name(layer, layer_group)
-
-
-@st.cache_resource
-def load_model(path):
-    """
-    `path` is the model's filename as stored in the HF repo (e.g.
-    "binary_vgg16.h5"). It's downloaded from Hugging Face Hub first —
-    hf_hub_download caches it on disk, so this only re-downloads if the
-    file isn't already cached locally.
-    """
+    directory = gallery_directory()
+    index = directory / "index.npz"
     try:
-        local_path = hf_hub_download(repo_id=HF_REPO_ID, filename=path)
-
-        if path == "binary_resnet50.h5":
-            model = build_binary_resnet50_architecture()
-            # See load_weights_manually() docstring for why we don't use
-            # model.load_weights(local_path, by_name=True) here.
-            load_weights_manually(model, local_path)
-            return model
-
-        if path == "multiclass_resnet50.h5":
-            model = build_multiclass_resnet50_architecture()
-            load_weights_manually(model, local_path)
-            return model
-
-        # Keras 3 blocks deserializing Lambda layers with a raw Python
-        # function by default (safety guard against untrusted files).
-        # Older TF/Keras versions don't have this kwarg at all, so we
-        # fall back gracefully if it's not supported.
-        try:
-            return tf.keras.models.load_model(local_path, safe_mode=False)
-        except TypeError:
-            return tf.keras.models.load_model(local_path)
-    except Exception as e:
-        st.error(f"⚠️ Failed to load model '{path}': {e}")
-        st.stop()
-
-# =========================
-# IMAGE PREPROCESSING
-# =========================
-def crop_brain_roi(mri_image):
-    """
-    Removes the black padding around an MRI scan and returns only the
-    brain region. Exactly mirrors the preprocessing used to train the
-    Binary models in the training notebook — required so inference
-    matches training conditions.
-    """
-    gray_image = cv2.cvtColor(mri_image, cv2.COLOR_RGB2GRAY)
-    blurred_gray = cv2.GaussianBlur(gray_image, (5, 5), 0)
-
-    binary_mask = cv2.threshold(blurred_gray, 45, 255, cv2.THRESH_BINARY)[1]
-    binary_mask = cv2.erode(binary_mask, None, iterations=2)
-    binary_mask = cv2.dilate(binary_mask, None, iterations=2)
-
-    all_contours = cv2.findContours(
-        binary_mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
-    all_contours = imutils.grab_contours(all_contours)
-
-    if len(all_contours) == 0:
-        return mri_image  # Nothing to crop — return as-is
-
-    largest_contour = max(all_contours, key=cv2.contourArea)
-
-    leftmost_point = tuple(largest_contour[largest_contour[:, :, 0].argmin()][0])
-    rightmost_point = tuple(largest_contour[largest_contour[:, :, 0].argmax()][0])
-    topmost_point = tuple(largest_contour[largest_contour[:, :, 1].argmin()][0])
-    bottommost_point = tuple(largest_contour[largest_contour[:, :, 1].argmax()][0])
-
-    cropped_brain = mri_image[
-        topmost_point[1]: bottommost_point[1],
-        leftmost_point[0]: rightmost_point[0]
-    ]
-
-    # Guard against a degenerate crop (empty slice) — fall back to original
-    if cropped_brain.size == 0:
-        return mri_image
-
-    return cropped_brain
+        return _load_gallery(str(directory), index.stat().st_mtime if index.is_file() else 0.0), None
+    except Gallery2DError as error:
+        return None, str(error)
+    except Exception as error:  # a damaged gallery must not take the analysis down with it
+        return None, f"The reference library could not be read: {error}"
 
 
-def preprocess_image(image, target_size, apply_crop=True):
-    """
-    Mirrors the notebook inference pipeline exactly: PIL RGB -> OpenCV BGR,
-    crop the brain ROI, resize, then normalise.  The returned BGR image is the
-    same image the model sees and is used as the Grad-CAM overlay background.
-    """
-    bgr_image = cv2.cvtColor(np.array(image.convert("RGB")), cv2.COLOR_RGB2BGR)
-    if apply_crop:
-        bgr_image = crop_brain_roi(bgr_image)
-
-    resized_bgr_image = cv2.resize(bgr_image, target_size, interpolation=cv2.INTER_CUBIC)
-    model_input = resized_bgr_image.astype("float32") / 255.0
-    return np.expand_dims(model_input, axis=0), resized_bgr_image
-
-
-def find_last_conv_layer(model):
-    """Returns the nested model and its final Conv2D layer for Grad-CAM."""
-    for layer in reversed(model.layers):
-        if isinstance(layer, layers.Conv2D):
-            return model, layer
-        if isinstance(layer, models.Model):
-            nested_result = find_last_conv_layer(layer)
-            if nested_result is not None:
-                return nested_result
-    return None
+# --------------------------------------------------------------------------- query handling
+def read_image(payload: bytes) -> Image.Image:
+    """Decode and sanity-check an upload; raises ValueError with a readable reason."""
+    try:
+        with Image.open(io.BytesIO(payload)) as probe:
+            probe.verify()
+        image = Image.open(io.BytesIO(payload))
+        image.load()
+    except (UnidentifiedImageError, OSError, SyntaxError) as error:
+        raise ValueError("This file could not be read as a JPG or PNG image.") from error
+    if image.format not in {"JPEG", "PNG"}:
+        raise ValueError(f"Only JPG and PNG images are supported (this file is {image.format}).")
+    if image.width * image.height > MAX_IMAGE_PIXELS:
+        raise ValueError("This image is too large. Please upload one under 4096 x 4096 pixels.")
+    if min(image.size) < MIN_IMAGE_SIDE:
+        raise ValueError(f"This image is too small to analyse (minimum {MIN_IMAGE_SIDE} pixels per side).")
+    return image.convert("RGB")
 
 
-def build_gradcam_model(model):
-    """
-    Builds a model that exposes the final convolutional activation and the
-    original prediction. VGG16 and ResNet50 are nested inside Sequential
-    wrappers, so their inner activations need to be connected back through
-    the remaining classifier layers explicitly.
-    """
-    conv_result = find_last_conv_layer(model)
-    if conv_result is None:
-        raise ValueError("This model has no convolutional layer for Grad-CAM.")
-
-    conv_container, conv_layer = conv_result
-    if conv_container is model:
-        return models.Model(model.inputs, [conv_layer.output, model.outputs[0]])
-
-    current_tensor = model.inputs[0]
-    conv_output = None
-    found_container = False
-
-    for layer in model.layers:
-        if layer is conv_container:
-            nested_gradcam_model = models.Model(
-                conv_container.inputs,
-                [conv_layer.output, conv_container.outputs[0]]
-            )
-            conv_output, current_tensor = nested_gradcam_model(current_tensor)
-            found_container = True
-        else:
-            current_tensor = layer(current_tensor)
-
-    if not found_container:
-        raise ValueError("Could not connect the model's convolutional layer for Grad-CAM.")
-
-    return models.Model(model.inputs, [conv_output, current_tensor])
+def _on_upload() -> None:
+    st.session_state.pop("demo_case", None)
 
 
-def create_gradcam_heatmap(model, model_input, task, predicted_index=None):
-    """Produces a normalised Grad-CAM heatmap for the predicted tumour class."""
-    gradcam_model = build_gradcam_model(model)
-
-    with tf.GradientTape() as tape:
-        conv_output, predictions = gradcam_model(model_input)
-        if task == "Binary":
-            # Binary models use one sigmoid unit: the positive class is Tumor.
-            target_score = predictions[:, 0]
-        else:
-            target_score = predictions[:, predicted_index]
-
-    gradients = tape.gradient(target_score, conv_output)
-    if gradients is None:
-        raise ValueError("Grad-CAM gradients could not be calculated for this model.")
-
-    channel_weights = tf.reduce_mean(gradients, axis=(0, 1, 2))
-    activation_map = conv_output[0] * channel_weights
-    heatmap = tf.reduce_sum(activation_map, axis=-1)
-    heatmap = tf.maximum(heatmap, 0)
-    max_value = tf.reduce_max(heatmap)
-
-    if float(max_value) == 0:
-        return np.zeros(heatmap.shape, dtype=np.float32)
-    return (heatmap / max_value).numpy()
+def _start_demo(case_id: str) -> None:
+    st.session_state["demo_case"] = case_id
+    st.session_state["uploader_nonce"] = st.session_state.get("uploader_nonce", 0) + 1  # clears the uploader
 
 
-def overlay_heatmap(image_bgr, heatmap, alpha=0.45):
-    """Blends a Grad-CAM heatmap onto the cropped, resized image used by the model."""
-    resized_heatmap = cv2.resize(heatmap, (image_bgr.shape[1], image_bgr.shape[0]))
-    heatmap_bgr = cv2.applyColorMap(np.uint8(255 * resized_heatmap), cv2.COLORMAP_JET)
-    overlay_bgr = cv2.addWeighted(image_bgr, 1 - alpha, heatmap_bgr, alpha, 0)
-    return heatmap_bgr, overlay_bgr
+def _clear() -> None:
+    st.session_state.pop("demo_case", None)
+    st.session_state.pop("result", None)
+    st.session_state["uploader_nonce"] = st.session_state.get("uploader_nonce", 0) + 1
 
 
-def show_tumor_type(
-    task,
-    predicted_class,
-    inferred_tumor_type=None,
-    inferred_type_confidence=None,
-):
-    """Renders safe educational context for the model's image-class result."""
-    st.markdown("##### 🧬 Tumour Type")
+def _select_case(case_id: str) -> None:
+    st.session_state["selected_case"] = case_id
 
-    if task == "MultiClass":
-        tumor_type = predicted_class
-        type_confidence = inferred_type_confidence
-        type_source = "the selected MultiClass model"
-    elif predicted_class != "Tumor":
-        st.info(
-            "The binary screening model predicted No Tumor, so no tumour type is reported."
-        )
-        return
-    elif inferred_tumor_type is None:
-        st.warning(
-            "The binary model predicted Tumor, but the follow-up MultiClass model "
-            "could not provide a tumour type. Please retry the image or select a "
-            "MultiClass model directly."
-        )
-        return
-    else:
-        tumor_type = inferred_tumor_type
-        type_confidence = inferred_type_confidence
-        type_source = f"the automatic {DEFAULT_TYPE_MODEL} follow-up model"
 
-    if tumor_type == "Healthy":
-        st.warning(
-            "The binary and MultiClass models disagree: the binary model predicted "
-            "Tumor while the follow-up model predicted Healthy. No tumour type is "
-            "reported for this disagreement."
-        )
-        return
+# --------------------------------------------------------------------------- HTML helpers
+def esc(value) -> str:
+    return html.escape(str(value))
 
-    type_column, confidence_column = st.columns(2)
-    with type_column:
-        st.metric("Model-predicted tumour type", tumor_type)
-    with confidence_column:
-        if type_confidence is not None:
-            st.metric("Type confidence", f"{type_confidence * 100:.2f}%")
-        else:
-            st.metric("Type confidence", "—")
-    st.caption(f"Type result produced by {type_source}.")
-    st.write(TUMOR_TYPE_INFO[tumor_type]["summary"])
 
-# =========================
-# SIDEBAR
-# =========================
-with st.sidebar:
-    st.markdown("### ⚙️ Select Model")
-    if APP_ACCESS_PASSWORD:
-        if st.button("🔒 Lock app", use_container_width=True):
-            st.session_state.pop("app_access_granted", None)
-            st.rerun()
-    selected_model = st.selectbox(
-        "Choose Model",
-        list(MODEL_INFO.keys()),
-        label_visibility="collapsed"
-    )
-    info = MODEL_INFO[selected_model]
-    val_loss_display = f"{info['val_loss']:.2f}" if info['val_loss'] is not None else "—"
+@st.cache_data(show_spinner=False, max_entries=64)
+def _png_uri(payload: bytes, max_side: int) -> str:
+    with Image.open(io.BytesIO(payload)) as image:
+        image = image.convert("RGB")
+        image.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG", optimize=True)
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
 
-    st.markdown(f"""
-    <div class="sidebar-info">
-        <div class="metric-row"><span class="metric-label">Task</span><span class="metric-val">{info['task']}</span></div>
-        <div class="metric-row"><span class="metric-label">Architecture</span><span class="metric-val">{info['architecture'].split('(')[0].strip()}</span></div>
-        <div class="metric-row"><span class="metric-label">Accuracy</span><span class="metric-val">{info['accuracy']}%</span></div>
-        <div class="metric-row"><span class="metric-label">Val Loss</span><span class="metric-val">{val_loss_display}</span></div>
-        <div class="metric-row"><span class="metric-label">Input Size</span><span class="metric-val">{info['img_size'][0]}×{info['img_size'][1]}</span></div>
-    </div>
-    """, unsafe_allow_html=True)
+
+def data_uri(source, max_side: int = VIEWER_MAX_SIDE) -> str:
+    """PNG data URI for a path, PIL image or RGB array (downscaled for display only)."""
+    if isinstance(source, (str, Path)):
+        return _png_uri(Path(source).read_bytes(), max_side)
+    image = source if isinstance(source, Image.Image) else Image.fromarray(np.asarray(source, dtype=np.uint8))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return _png_uri(buffer.getvalue(), max_side)
+
+
+LEGEND = ('<span class="viewer-legend" role="img" aria-label="Heat-map colour scale from low to high attention">'
+          '<span>Low</span><i aria-hidden="true"></i><span>High</span></span>')
+
+
+def ui_viewer(uri: str, tag: str | None = None, alt: str = "MRI slice", size: str = "main", meta: str | None = None, legend: bool = False) -> str:
+    """Black image viewer with a label top-left, an optional note bottom-left and colour bar bottom-right."""
+    chip = f'<span class="viewer-tag">{esc(tag)}</span>' if tag else ""
+    note = f'<span class="viewer-meta">{esc(meta)}</span>' if meta else ""
+    return f'<figure class="viewer viewer-{size}">{chip}{note}{LEGEND if legend else ""}<img src="{uri}" alt="{esc(alt)}"></figure>'
+
+
+def panel_head(title: str, aside: str = "") -> str:
+    return f'<div class="panel-head"><h2>{esc(title)}</h2>{f"<span class=panel-aside>{aside}</span>" if aside else ""}</div>'
+
+
+def ui_kv(rows: list[tuple[str, str]]) -> str:
+    return '<dl class="kv">' + "".join(f"<dt>{esc(k)}</dt><dd>{v}</dd>" for k, v in rows) + "</dl>"
+
+
+def ui_notice(title: str, body: str, tone: str = "info") -> str:
+    return f'<div class="notice {tone}" role="{"alert" if tone == "warn" else "note"}"><strong>{esc(title)}</strong> {body}</div>'
+
+
+def ui_bar(value: float) -> str:
+    return f'<span class="bar" aria-hidden="true"><span style="width:{max(0.0, min(value, 1.0)) * 100:.1f}%"></span></span>'
+
+
+DISCLAIMER = "Research and education only. Not a medical device and not for diagnosis."
+
+
+def render_footer() -> None:
+    from retrieval.gallery2d import SOURCE_CITATION
 
     st.markdown(
-        f"<p style='color:{TEXT_MUTED}; font-size:0.8rem; margin-top:1rem;'>"
-        f"Dataset: {info['dataset']}</p>",
-        unsafe_allow_html=True
+        f'<footer class="app-foot"><p>{esc(DISCLAIMER)} Do not upload identifiable patient data.</p>'
+        "<p>Models: ResNet50 tumour detector (99.1% validation accuracy) and ResNet50 four-class type model (96.2%), "
+        f"trained on public 2D MRI datasets. Reference data: {esc(SOURCE_CITATION)}.</p></footer>",
+        unsafe_allow_html=True,
     )
 
-    st.markdown("<div class='disclaimer'>⚠️ This tool is for educational/research purposes only and is not a substitute for professional medical diagnosis.</div>", unsafe_allow_html=True)
 
-# =========================
-# HEADER
-# =========================
-st.markdown("""
-<div class="app-header">
-    <div class="brain-icon">🧠</div>
-    <h1>Brain Tumor Detection</h1>
-</div>
-<p class="app-subtitle">Upload an MRI scan and choose a model from the sidebar to run the analysis.</p>
-""", unsafe_allow_html=True)
+# --------------------------------------------------------------------------- application header
+gallery, gallery_problem = get_gallery()
+demo_cases = gallery.demo_cases() if gallery else []
+upload_key = f"upload-{st.session_state.get('uploader_nonce', 0)}"
+has_query = st.session_state.get("demo_case") is not None or st.session_state.get(upload_key) is not None
 
-# =========================
-# TABS
-# =========================
-tab_detect, tab_compare, tab_retrieve = st.tabs(
-    ["🔍 Detection", "📊 Model Comparison", "📚 Similar Cases"]
+library_status = (
+    f'<span class="status ok"><i aria-hidden="true"></i>Reference library: {len(gallery.case_ids)} cases</span>'
+    if gallery else '<span class="status warn"><i aria-hidden="true"></i>Reference library unavailable</span>'
+)
+st.markdown(
+    '<header class="app-header">'
+    '<div class="app-brand"><span class="app-logo" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" '
+    'stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17M7.5 8.5c1.5.9 3 .9 4.5 0'
+    'M12 8.5c1.5.9 3 .9 4.5 0M7.5 15.5c1.5-.9 3-.9 4.5 0M12 15.5c1.5-.9 3-.9 4.5 0"/></svg></span>'
+    '<div><div class="app-title">Brain MRI Analysis</div><div class="app-sub">Tumour detection, explanation and similar-case search · research use only</div></div></div>'
+    f'<div class="app-status"><span class="status ok"><i aria-hidden="true"></i>Models: ResNet50 ×2</span>{library_status}</div>'
+    "</header>",
+    unsafe_allow_html=True,
 )
 
-# ---------- TAB 1: DETECTION ----------
-with tab_detect:
-    model = load_model(info["file"])
+# --------------------------------------------------------------------------- workspace: Scan | Results
+scan_column, result_column = st.columns([1.45, 1], gap="medium")
+scan_panel = scan_column.container(key="scan-panel")
+results_panel = result_column.container(key="results-panel")
 
-    col_upload, col_result = st.columns([1, 1])
-
-    with col_upload:
-        st.markdown('<div class="app-card">', unsafe_allow_html=True)
-        st.markdown("#### 📤 Upload Image")
-        uploaded_file = st.file_uploader(
-            "Upload MRI Image",
-            type=["jpg", "jpeg", "png"],
-            label_visibility="collapsed"
-        )
-        if uploaded_file is not None:
-            image = Image.open(uploaded_file).convert("RGB")
-            st.image(image, caption="Uploaded MRI", use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with col_result:
-        st.markdown('<div class="app-card">', unsafe_allow_html=True)
-        st.markdown("#### 🧾 Result")
-
-        if uploaded_file is None:
-            st.write("Upload an image first to see the result here.")
-        else:
-            processed_image, processed_bgr_image = preprocess_image(
-                image, info["img_size"], apply_crop=True
-            )
-            prediction = model.predict(processed_image, verbose=0)
-
-            if info["task"] == "Binary":
-                confidence = float(prediction[0][0])
-                if confidence > 0.5:
-                    predicted_class = binary_classes[1]
-                    final_confidence = confidence
-                else:
-                    predicted_class = binary_classes[0]
-                    final_confidence = 1 - confidence
-                is_tumor = predicted_class == "Tumor"
-            else:
-                predicted_index = int(np.argmax(prediction))
-                predicted_class = multiclass_names[predicted_index]
-                final_confidence = float(np.max(prediction))
-                is_tumor = predicted_class != "Healthy"
-
-            # A binary screening model cannot identify the tumour subtype. When it
-            # flags Tumor, run the strongest available multi-class model as a second
-            # stage so users do not have to upload the image a second time.
-            inferred_tumor_type = predicted_class if info["task"] == "MultiClass" else None
-            inferred_type_confidence = final_confidence if info["task"] == "MultiClass" else None
-            if info["task"] == "Binary" and is_tumor:
-                type_model_info = MODEL_INFO[DEFAULT_TYPE_MODEL]
-                with st.spinner("Classifying the predicted tumour type..."):
-                    type_model = load_model(type_model_info["file"])
-                    type_input, _ = preprocess_image(
-                        image, type_model_info["img_size"], apply_crop=True
-                    )
-                    type_prediction = type_model.predict(type_input, verbose=0)
-                type_index = int(np.argmax(type_prediction))
-                inferred_tumor_type = multiclass_names[type_index]
-                inferred_type_confidence = float(np.max(type_prediction))
-
-            css_class = "tumor" if is_tumor else "no-tumor"
-            st.markdown(f"""
-            <div class="result-card {css_class}">
-                <div class="result-label">Result</div>
-                <div class="result-value {css_class}">{predicted_class}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            st.metric("Confidence", f"{final_confidence * 100:.2f}%")
-            st.progress(min(final_confidence, 1.0))
-            show_tumor_type(
-                info["task"],
-                predicted_class,
-                inferred_tumor_type=inferred_tumor_type,
-                inferred_type_confidence=inferred_type_confidence,
-            )
-
-            if is_tumor:
-                st.markdown("##### 🔥 Model Attention Map")
-                st.caption(
-                    "Grad-CAM highlights image regions that most influenced this "
-                    "tumour prediction. It is not a clinical tumour segmentation "
-                    "or a confirmed tumour boundary."
-                )
-                try:
-                    heatmap = create_gradcam_heatmap(
-                        model,
-                        processed_image,
-                        info["task"],
-                        predicted_index=predicted_index if info["task"] == "MultiClass" else None
-                    )
-                    heatmap_bgr, overlay_bgr = overlay_heatmap(processed_bgr_image, heatmap)
-
-                    heatmap_col, overlay_col = st.columns(2)
-                    with heatmap_col:
-                        st.image(
-                            cv2.cvtColor(heatmap_bgr, cv2.COLOR_BGR2RGB),
-                            caption="Grad-CAM attention",
-                            use_container_width=True
-                        )
-                    with overlay_col:
-                        st.image(
-                            cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB),
-                            caption="Attention overlay on model input",
-                            use_container_width=True
-                        )
-                except Exception as error:
-                    st.warning(f"The prediction was generated, but its attention map could not be created: {error}")
-            else:
-                st.info("No tumour class was predicted, so a tumour-specific attention map is not shown.")
-
-        st.markdown('</div>', unsafe_allow_html=True)
-
-# ---------- TAB 2: MODEL COMPARISON ----------
-with tab_compare:
-    st.markdown('<div class="app-card">', unsafe_allow_html=True)
-    st.markdown("#### 📋 All Models Comparison")
-
-    df = pd.DataFrame([
-        {
-            "Model": name,
-            "Task": d["task"],
-            "Architecture": d["architecture"],
-            "Accuracy (%)": d["accuracy"],
-            "Val Loss": d["val_loss"] if d["val_loss"] is not None else "—",
-        }
-        for name, d in MODEL_INFO.items()
-    ]).sort_values("Accuracy (%)", ascending=False).reset_index(drop=True)
-
-    st.dataframe(df, use_container_width=True, hide_index=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    col_bin, col_multi = st.columns(2)
-
-    with col_bin:
-        st.markdown('<div class="app-card">', unsafe_allow_html=True)
-        st.markdown("##### Binary Models — Accuracy")
-        bin_df = df[df["Task"] == "Binary"].set_index("Model")[["Accuracy (%)"]]
-        st.bar_chart(bin_df, color=PRIMARY)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with col_multi:
-        st.markdown('<div class="app-card">', unsafe_allow_html=True)
-        st.markdown("##### MultiClass Models — Accuracy")
-        multi_df = df[df["Task"] == "MultiClass"].set_index("Model")[["Accuracy (%)"]]
-        st.bar_chart(multi_df, color=PRIMARY_DARK)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    # ---------- Training history / confusion matrix charts (from the notebook) ----------
-    st.markdown('<div class="app-card">', unsafe_allow_html=True)
-    st.markdown("#### 📈 Training Results")
-    st.caption("Accuracy/loss curves and confusion matrix recorded for each model on the validation set — taken directly from the training notebook.")
-
-    hist_task = st.radio(
-        "Task",
-        ["Binary", "MultiClass"],
-        horizontal=True,
+with scan_panel:
+    st.markdown(panel_head("Scan"), unsafe_allow_html=True)
+    if has_query:
+        st.markdown('<span class="is-compact" aria-hidden="true"></span>', unsafe_allow_html=True)
+    uploaded = st.file_uploader(
+        "Upload an MRI slice (JPG or PNG)",
+        type=["jpg", "jpeg", "png"],
+        key=upload_key,
+        on_change=_on_upload,
         label_visibility="collapsed",
-        key="history_task_filter"
     )
+    if has_query:
+        hint_column, action_column = st.columns([3, 1], vertical_alignment="center")
+        if st.session_state.get("demo_case"):
+            hint_column.markdown(
+                f'<p class="hint">Sample scan <b>{esc(st.session_state["demo_case"])}</b> · held out from the reference library</p>',
+                unsafe_allow_html=True,
+            )
+        else:
+            shown = st.session_state.get(upload_key)
+            hint_column.markdown(f'<p class="hint"><b>{esc(shown.name if shown else "Your scan")}</b> · drop a new file to replace it</p>', unsafe_allow_html=True)
+        action_column.button("Clear", on_click=_clear, key="clear-button", width="stretch")
+    toolbar_slot = st.empty()
+    image_slot = st.empty()
+    caption_slot = st.empty()
 
-    task_models = {name: d for name, d in MODEL_INFO.items() if d["task"] == hist_task}
-    hist_model_name = st.selectbox(
-        "Model",
-        list(task_models.keys()),
-        key="history_model_select"
-    )
-    selected_info = task_models[hist_model_name]
-
-    st.markdown(f"###### {hist_model_name} — Training curves (accuracy & loss)")
-    st.image(selected_info["history_chart"], use_container_width=True)
-
-    with st.expander("Show confusion matrix too"):
-        st.image(selected_info["confusion_chart"], use_container_width=True)
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# ---------- TAB 3: SIMILAR-CASE RETRIEVAL ----------
-with tab_retrieve:
+# Resolve the active query: an upload wins over a demo scan.
+query_bytes, query_name = None, None
+if uploaded is not None:
+    query_bytes, query_name = uploaded.getvalue(), uploaded.name
+elif st.session_state.get("demo_case") and gallery is not None:
     try:
-        from retrieval.quick_ui import render_similarity_page
-    except ImportError:
-        st.info(
-            "The Similar Cases page could not be loaded. Install the application "
-            "dependencies with `pip install -r requirements.txt`, then restart Streamlit."
+        demo_path = gallery.demo_path(st.session_state["demo_case"])
+        query_bytes, query_name = demo_path.read_bytes(), f"Sample scan {st.session_state['demo_case']}"
+    except Exception as error:
+        with scan_panel:
+            st.error(f"The sample scan could not be opened: {error}")
+
+if query_bytes is None:
+    st.session_state.pop("result", None)
+    with results_panel:
+        st.markdown(panel_head("Results"), unsafe_allow_html=True)
+        st.markdown(
+            '<div class="empty"><p class="empty-title">No scan loaded</p>'
+            '<p class="empty-text">Upload one axial MRI slice, or open a sample scan. The prediction, tumour type, heat map '
+            "and similar reference cases appear here automatically.</p></div>",
+            unsafe_allow_html=True,
         )
-    else:
-        render_similarity_page()
+        if gallery_problem:
+            st.markdown(
+                ui_notice("Reference library unavailable.", f"{esc(gallery_problem)} Predictions and heat maps still work.", "warn"),
+                unsafe_allow_html=True,
+            )
+        if demo_cases:
+            st.button("Try a demo scan", on_click=_start_demo, args=(demo_cases[0],), key="demo-button", type="primary", width="stretch")
+            st.markdown('<p class="label">Sample scans</p><p class="hint">Held out from the reference library, so they are searched like a new upload.</p>',
+                        unsafe_allow_html=True)
+            with st.container(key="sample-grid"):
+                picks = demo_cases[:6]
+                for row_start in range(0, len(picks), 3):
+                    for column, case_id in zip(st.columns(3), picks[row_start:row_start + 3]):
+                        with column:
+                            st.markdown(ui_viewer(data_uri(gallery.demo_path(case_id), 256), alt=f"Sample scan {case_id}", size="thumb"), unsafe_allow_html=True)
+                            st.button(case_id, key=f"demo-{case_id}", on_click=_start_demo, args=(case_id,), width="stretch")
+    render_footer()
+    st.stop()
+
+try:
+    query_image = read_image(query_bytes)
+except ValueError as error:
+    st.session_state.pop("result", None)
+    with scan_panel:
+        st.error(str(error))
+    st.stop()
+
+query_id = hashlib.sha256(query_bytes).hexdigest()
+result = st.session_state.get("result")
+if result is not None and result["id"] != query_id:  # a new scan replaces every earlier result
+    result = None
+    st.session_state.pop("result", None)
+    st.session_state.pop("selected_case", None)
+    st.session_state.pop("scan-view", None)
+
+# The scan stays visible while the models run.
+image_slot.markdown(ui_viewer(data_uri(query_image), tag="Original", alt="Uploaded MRI slice", meta=f"{query_image.width} × {query_image.height} px"),
+                    unsafe_allow_html=True)
+caption_slot.markdown(f'<p class="caption"><b>{esc(query_name)}</b> · {query_image.width} × {query_image.height} px</p>', unsafe_allow_html=True)
+
+# --------------------------------------------------------------------------- 1-2. prediction and tumour type
+with results_panel:
+    head_slot = st.empty()
+    head_slot.markdown(panel_head("Results", "Running"), unsafe_allow_html=True)
+    if result is None:
+        try:
+            with st.spinner("Loading models (the first run downloads the weights)"):
+                model_set = get_models()
+            started = time.perf_counter()
+            with st.spinner("Analysing scan"):
+                analysis = model_set.analyse(query_image)
+            print(f"[brain-mri] inference run for query {query_id[:10]}", flush=True)
+        except Exception as error:
+            head_slot.markdown(panel_head("Results", "Failed"), unsafe_allow_html=True)
+            st.error(f"The scan could not be analysed: {error}")
+            st.stop()
+        result = {"id": query_id, "analysis": analysis, "search": None, "search_error": None, "searched": False,
+                  "timings": {"analyse": time.perf_counter() - started}}
+        st.session_state["result"] = result
+    analysis = result["analysis"]
+    head_slot.markdown(panel_head("Results", f"Analysed in {result['timings']['analyse']:.1f} s"), unsafe_allow_html=True)
+
+    tumour_pct = analysis.tumour_probability * 100
+    tone = "positive" if analysis.has_tumour else "negative"
+    icon = ('<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" '
+            'stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="8" r="2.6"/></svg>' if analysis.has_tumour else
+            '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">'
+            '<circle cx="8" cy="8" r="6.5"/><path d="M5.2 8.2l1.9 1.9 3.8-4" stroke-linecap="round" stroke-linejoin="round"/></svg>')
+    st.markdown(
+        f'<div class="verdict"><p class="label">Model prediction</p><p class="badge {tone}">{icon}{esc(analysis.label)}</p></div>'
+        + ui_kv([
+            ("Model confidence", f'<b>{analysis.confidence * 100:.1f}%</b>{ui_bar(analysis.confidence)}'),
+            ("Detector tumour score", f'{tumour_pct:.1f}% <span class="muted">· threshold 50%</span>'),
+        ]),
+        unsafe_allow_html=True,
+    )
+
+    type_value = esc(analysis.tumour_type) if analysis.tumour_type else "Not reported"
+    type_conf = f'<span class="muted">{analysis.type_confidence * 100:.1f}%</span>' if analysis.type_confidence is not None else ""
+    table = ""
+    if analysis.has_tumour and analysis.type_probabilities:
+        top = max(analysis.type_probabilities, key=analysis.type_probabilities.get)
+        table = '<table class="probs" aria-label="Type model probabilities"><tbody>' + "".join(
+            f'<tr class="{"top" if name == top else ""}"><th scope="row">{esc(name)}</th><td>{ui_bar(value)}</td><td class="num">{value * 100:.1f}%</td></tr>'
+            for name, value in analysis.type_probabilities.items()
+        ) + "</tbody></table>"
+    st.markdown(
+        f'<div class="section"><p class="label">Predicted tumour type</p><p class="type-value">{type_value} {type_conf}</p>{table}</div>',
+        unsafe_allow_html=True,
+    )
+    if analysis.tumour_type:
+        from inference import TUMOR_TYPE_INFO
+
+        st.markdown(f'<p class="note">{esc(TUMOR_TYPE_INFO[analysis.tumour_type])}</p>', unsafe_allow_html=True)
+    elif analysis.type_note:
+        st.markdown(f'<p class="note">{esc(analysis.type_note)}</p>', unsafe_allow_html=True)
+    st.markdown('<p class="fine">Model outputs, not a diagnosis.</p>', unsafe_allow_html=True)
+
+# --------------------------------------------------------------------------- 3. Grad-CAM view switch (never reruns the models)
+if analysis.overlay is not None:
+    with toolbar_slot.container():
+        view = st.segmented_control(
+            "Scan view", ["Original", "Grad-CAM overlay", "Side by side"], default="Grad-CAM overlay",
+            key="scan-view", label_visibility="collapsed",
+        ) or "Original"
+    if view == "Grad-CAM overlay":
+        image_slot.markdown(ui_viewer(data_uri(analysis.overlay), tag="Grad-CAM", alt="Grad-CAM overlay on the uploaded slice",
+                                      meta=f"Tumour score {tumour_pct:.1f}%", legend=True), unsafe_allow_html=True)
+    elif view == "Side by side":
+        image_slot.markdown(
+            '<div class="viewer-pair">'
+            + ui_viewer(data_uri(query_image), tag="Original", alt="Uploaded MRI slice", size="half")
+            + ui_viewer(data_uri(analysis.overlay), tag="Grad-CAM", alt="Grad-CAM overlay", size="half", legend=True)
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+    if view != "Original":
+        caption_slot.markdown(
+            '<p class="caption">Grad-CAM: warmer colours mark the regions that most raised the tumour score. It is not a tumour outline.</p>',
+            unsafe_allow_html=True,
+        )
+else:
+    caption_slot.markdown(
+        ui_notice("Heat map unavailable.", f"The prediction is fine, but the Grad-CAM overlay failed ({esc(analysis.overlay_error)}).", "warn"),
+        unsafe_allow_html=True,
+    )
+
+# --------------------------------------------------------------------------- 4. reference cases
+if gallery is not None and not result["searched"]:
+    started = time.perf_counter()
+    with st.spinner("Finding reference cases"):
+        try:
+            if analysis.embedding is None:
+                raise RuntimeError(analysis.embedding_error or "no image features were produced for this scan")
+            from inference import EMBEDDING_NAME
+
+            if gallery.feature_name != EMBEDDING_NAME:
+                raise RuntimeError(
+                    "the reference index was built with different image features than this app uses; "
+                    "rebuild it with: python -m retrieval.gallery2d index"
+                )
+            result["search"] = gallery.search(analysis.embedding, query_image, top_k=TOP_K)
+        except Exception as error:
+            result["search_error"] = str(error)
+    result["searched"] = True
+    result["timings"]["references"] = time.perf_counter() - started
+
+with st.container(key="refs-panel"):
+    aside = f"{len(gallery.case_ids)} reference cases · UPENN-GBM" if gallery else ""
+    st.markdown(
+        panel_head("Similar cases", esc(aside))
+        + '<p class="hint">Ranked by 2D visual similarity (1.00 = identical). It compares appearance only and says nothing about this scan\'s diagnosis.</p>',
+        unsafe_allow_html=True,
+    )
+    if gallery is None:
+        st.markdown(ui_notice("Reference library unavailable.", f"{esc(gallery_problem)} The analysis above is unaffected.", "warn"), unsafe_allow_html=True)
+    elif result["search_error"]:
+        st.markdown(ui_notice("Reference search failed.", f"{esc(result['search_error'])} The analysis above is unaffected.", "warn"), unsafe_allow_html=True)
+    elif result["search"] is not None:
+        search = result["search"]
+        predicted = analysis.tumour_type or ("no tumour" if not analysis.has_tumour else None)
+        if analysis.tumour_type == "Glioma":
+            st.markdown(ui_notice("Library scope.", f"All {len(gallery.case_ids)} reference cases are glioblastoma from UPENN-GBM."), unsafe_allow_html=True)
+        else:
+            lead = f"The model predicted {esc(predicted.lower())} for this scan, but the" if predicted else "The"
+            st.markdown(
+                ui_notice("Library scope.", f"{lead} reference library only contains glioblastoma. These are the nearest-looking "
+                          "glioblastoma slices, not examples of the predicted class.", "warn"),
+                unsafe_allow_html=True,
+            )
+        if search.excluded:
+            st.markdown(f'<p class="note">This image is identical to reference case {esc(", ".join(search.excluded))}, which was left out of its own results.</p>',
+                        unsafe_allow_html=True)
+        if not search.matches:
+            st.markdown(ui_notice("No reference cases were returned.", ""), unsafe_allow_html=True)
+
+matches = result["search"].matches if result.get("search") and not result["search_error"] else []
+if matches:
+    case_ids = [match.case_id for match in matches]
+    selected_id = st.session_state.get("selected_case")
+    if selected_id not in case_ids:
+        selected_id = case_ids[0]  # the top result opens by default
+    with st.container(key="ref-grid"):
+        for column, match in zip(st.columns(len(matches)), matches):
+            with column:
+                is_selected = match.case_id == selected_id
+                st.markdown(
+                    f'<div class="ref-card{" selected" if is_selected else ""}">'
+                    f'<div class="ref-thumb"><img src="{data_uri(match.image_path, 320)}" alt="Reference case {esc(match.case_id)}"></div>'
+                    f'<div class="ref-body"><span class="sr-only">Rank {match.rank}</span>'
+                    f'<div class="ref-title"><span class="ref-rank">#{match.rank}</span>{esc(match.details["Documented diagnosis"])}</div>'
+                    f'<div class="ref-score"><span>Similarity</span><b>{match.similarity:.2f}</b></div>{ui_bar(match.similarity)}'
+                    f'<div class="ref-id">{esc(match.details.get("Source ID", match.case_id))}</div></div></div>',
+                    unsafe_allow_html=True,
+                )
+                st.button("Selected" if is_selected else "Compare", key=f"select-{match.case_id}",
+                          type="primary" if is_selected else "secondary", on_click=_select_case, args=(match.case_id,), width="stretch")
+
+    from retrieval.gallery2d import SOURCE_CITATION
+
+    chosen = next(match for match in matches if match.case_id == selected_id)
+    with st.container(key="compare-panel"):
+        st.markdown(
+            panel_head("Comparison", f'2D visual similarity <b class="num">{chosen.similarity:.2f}</b>')
+            + f'<p class="hint">Uploaded scan vs reference rank {chosen.rank}</p>',
+            unsafe_allow_html=True,
+        )
+        left, right = st.columns(2, gap="medium")
+        with left:
+            rows = [("Model prediction", esc(analysis.label)), ("Model confidence", f"{analysis.confidence * 100:.1f}%")]
+            if analysis.tumour_type:
+                rows.append(("Predicted tumour type", f"{esc(analysis.tumour_type)} ({analysis.type_confidence * 100:.1f}%)"))
+            st.markdown(
+                f'<div class="cmp-head"><p class="label">Uploaded scan · model prediction</p><p class="cmp-title">{esc(analysis.label)}</p></div>'
+                + ui_viewer(data_uri(query_image, 720), tag="Uploaded", alt="Uploaded MRI slice", size="cmp")
+                + ui_kv(rows)
+                + '<p class="fine">Model outputs only. No clinical details are known for this scan.</p>',
+                unsafe_allow_html=True,
+            )
+        with right:
+            rows = [(k, esc(v)) for k, v in chosen.details.items()]
+            st.markdown(
+                f'<div class="cmp-head"><p class="label">Reference case · documented diagnosis</p>'
+                f'<p class="cmp-title">{esc(chosen.details["Documented diagnosis"])} · rank {chosen.rank}</p></div>'
+                + ui_viewer(data_uri(chosen.image_path, 720), tag="Reference", alt=f"Reference case {chosen.case_id}", size="cmp")
+                + ui_kv(rows)
+                + f'<p class="fine">{esc(SOURCE_CITATION)}. Missing fields are left out.</p>',
+                unsafe_allow_html=True,
+            )
+
+render_footer()
+if APP_ACCESS_PASSWORD and st.button("Lock app", key="lock-button"):
+    st.session_state.pop("app_access_granted", None)
+    st.rerun()
