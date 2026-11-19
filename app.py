@@ -28,6 +28,11 @@ from PIL import Image, UnidentifiedImageError
 from streamlit.errors import StreamlitSecretNotFoundError
 
 APP_DIR = Path(__file__).parent
+LOGO_PATH = APP_DIR / "assets" / "brainmri-logo.svg"
+LOGO_DATA_URL = (
+    "data:image/svg+xml;base64,"
+    + base64.b64encode(LOGO_PATH.read_bytes()).decode("ascii")
+)
 MAX_IMAGE_PIXELS = 4096 * 4096
 MIN_IMAGE_SIDE = 32
 VIEWER_MAX_SIDE = 1024  # display copies are downscaled; analysis always uses the full image
@@ -227,9 +232,7 @@ library_status = (
 )
 st.markdown(
     '<header class="app-header">'
-    '<div class="app-brand"><span class="app-logo" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" '
-    'stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17M7.5 8.5c1.5.9 3 .9 4.5 0'
-    'M12 8.5c1.5.9 3 .9 4.5 0M7.5 15.5c1.5-.9 3-.9 4.5 0M12 15.5c1.5-.9 3-.9 4.5 0"/></svg></span>'
+    f'<div class="app-brand"><img class="app-logo app-logo-img" src="{LOGO_DATA_URL}" alt="" aria-hidden="true">'
     '<div><div class="app-title">Brain MRI Analysis</div><div class="app-sub">Tumour detection, explanation and similar-case search · research use only</div></div></div>'
     f'<div class="app-status"><span class="status ok"><i aria-hidden="true"></i>Models: ResNet50 ×2</span>{library_status}</div>'
     "</header>",
