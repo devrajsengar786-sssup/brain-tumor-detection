@@ -76,8 +76,18 @@ def get_models():
     return ModelSet.load()
 
 
+LOCAL_GALLERY = APP_DIR / "artifacts" / "gallery_2d"  # written by `python -m retrieval.gallery2d prepare` (git-ignored)
+BUNDLED_GALLERY = APP_DIR / "data" / "gallery_2d"  # prebuilt copy shipped with the repository (used on Streamlit Cloud)
+
+
 def gallery_directory() -> Path:
-    return Path(os.environ.get("GALLERY_2D_DIR") or _secret("GALLERY_2D_DIR") or APP_DIR / "artifacts" / "gallery_2d")
+    """GALLERY_2D_DIR (env or secret) wins; otherwise a locally built gallery; otherwise the bundled one."""
+    configured = os.environ.get("GALLERY_2D_DIR") or _secret("GALLERY_2D_DIR")
+    if configured:
+        return Path(configured)
+    if (LOCAL_GALLERY / "cases.csv").is_file():
+        return LOCAL_GALLERY
+    return BUNDLED_GALLERY
 
 
 @st.cache_resource(show_spinner=False)
