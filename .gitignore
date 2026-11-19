@@ -17,6 +17,8 @@ tmp/
 *.nii.gz
 gallery_bundle*.zip
 retrieval_code.zip
+# Submission ZIPs are built from a commit with `git archive`; never commit them.
+*.zip
 
 # Notebook checkpoints, logs and OS/editor clutter.
 .ipynb_checkpoints/

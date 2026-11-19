@@ -140,17 +140,10 @@ Linux/macOS: replace `py -3.12` with `python3.12` and `.\.venv\Scripts\python.ex
 
 ## Run steps
 
-The app works without the reference library (prediction and Grad-CAM only). For the full workflow, build the
-reference gallery once (section 10), then start the app.
+The repository ships a ready-built reference gallery (`data/gallery_2d/`, 3.3 MB), so the app works straight after
+installation:
 
 ```powershell
-# 1. Build the input bundle from the public UPENN-GBM mirror (one-time, ~1.6 GB download, see section 10)
-.\.venv\Scripts\python.exe -m retrieval.cli build-upenn-bundle --raw-dir ..\upenn_raw --out artifacts\gallery_bundle
-
-# 2. Build the searchable 2D gallery from the bundle (one-time)
-.\.venv\Scripts\python.exe -m retrieval.gallery2d prepare
-
-# 3. Start the app
 .\.venv\Scripts\python.exe -m streamlit run app.py
 ```
 
@@ -158,8 +151,22 @@ Streamlit opens `http://localhost:8501`. Upload a JPG/PNG axial MRI slice, or pr
 The first analysis downloads the two model files from Hugging Face (about 2 × 130 MB, cached afterwards; no account
 needed).
 
+**Optional: rebuild the gallery yourself from the public data** (to reproduce it, or after changing the builder):
+
+```powershell
+# 1. Build the input bundle from the public UPENN-GBM mirror (~1.6 GB download, see section 10)
+.\.venv\Scripts\python.exe -m retrieval.cli build-upenn-bundle --raw-dir ..\upenn_raw --out artifacts\gallery_bundle
+
+# 2. Build the searchable 2D gallery from the bundle (written to artifacts\gallery_2d, which the app then prefers)
+.\.venv\Scripts\python.exe -m retrieval.gallery2d prepare
+```
+
 Measured on a clean clone (Windows 11 laptop, 2026-11-18): step 1 took **57 minutes** (mostly the 1.5 GB download),
-step 2 took **3.5 minutes**. After step 1 the raw folder (`..\upenn_raw`) is no longer needed and can be deleted.
+step 2 took **3.5 minutes**, and the result was identical to the shipped gallery. After step 1 the raw folder
+(`..\upenn_raw`) is no longer needed and can be deleted.
+
+**Streamlit Community Cloud:** deploy `app.py` from this repository with Python 3.12. No secrets or extra steps are
+needed; the app uses the shipped gallery automatically.
 
 ## Database configuration (file-backed reference gallery)
 
@@ -168,12 +175,16 @@ loads read-only at start-up.
 
 ### What the app reads
 
-| Setting | Default | How to change |
-|---|---|---|
-| Reference gallery folder | `artifacts/gallery_2d/` | Environment variable `GALLERY_2D_DIR`, or the same key in `.streamlit/secrets.toml` |
+The app picks the reference gallery folder in this order:
+
+1. `GALLERY_2D_DIR`, if set as an environment variable or as a key in `.streamlit/secrets.toml`;
+2. `artifacts/gallery_2d/`, if you built one locally with `prepare` (git-ignored);
+3. `data/gallery_2d/`, the prebuilt gallery shipped in the repository (this is what Streamlit Cloud uses).
+
+Both built-in locations have the same layout:
 
 ```text
-artifacts/gallery_2d/
+data/gallery_2d/   (or artifacts/gallery_2d/)
 ├── cases.csv          # one row per slice: case_id, role (reference | demo), participant_id, verified,
 │                      # diagnosis, sequence, slice_index, age_years, sex, tumour_volume_ml, idh1, mgmt, pixel_sha256
 ├── index.npz          # 103 L2-normalised 2048-d ResNet50 embeddings of the reference slices (+ case IDs, feature name)
@@ -187,7 +198,8 @@ command to fix it. Changing `GALLERY_2D_DIR` points the app at another gallery w
 
 ### Where the gallery comes from
 
-The gallery is **built locally** from an *input bundle* by `python -m retrieval.gallery2d prepare`:
+The shipped `data/gallery_2d/` was produced exactly this way from public data. To rebuild it, the gallery is built
+from an *input bundle* by `python -m retrieval.gallery2d prepare`:
 
 | | Location | Contents |
 |---|---|---|
@@ -341,11 +353,12 @@ replaced by the single-upload page.
 | `tests/test_app.py` (11) | The page: empty state, demo scan, order of sections, case selection without re-inference, replacing an upload, invalid file, missing gallery, failed search, failed heat map, scope messages | Streamlit `AppTest` with **tiny stand-in Keras models** and a **synthetic** gallery |
 | `tests/test_inference.py` (12) | Brain crop, preprocessing, Grad-CAM overlay, weight loader, prediction/type logic | **Stand-in models** (no downloads) |
 | `tests/test_gallery2d.py` (12) | Slice export, join verification, held-out exclusion, exact-copy exclusion, missing fields | **Synthetic** NIfTI files |
+| `tests/test_bundled_gallery.py` (3) | The shipped gallery is complete and verified, held-out cases are not searchable, and the app finds it with no configuration (as on Streamlit Cloud) | **Real** shipped gallery; no models loaded |
 | `test_retrieval_core.py` (2), `test_index_fixes.py` (13), `test_upenn.py` (10), `test_gallery_bundle.py` (16) | 3D research baseline: splits, scaling, downloads (local HTTP server), validation, bundle | **Synthetic** data |
 
-Result on a clean clone with Python 3.12.9: **76 passed** in 80 s. The real models and the real gallery are not
-exercised by the automated tests; they were checked end to end in a browser against a freshly built gallery
-(see `docs/screenshots/BUILD.md`).
+Result with Python 3.12.9 and the clean-install packages: **79 passed** (2026-11-19). The real models are not
+exercised by the automated tests; together with the shipped gallery they were checked end to end in a browser with a
+real held-out scan (see `docs/screenshots/BUILD.md`).
 
 ## Repository structure
 
@@ -355,6 +368,7 @@ exercised by the automated tests; they were checked end to end in a browser agai
 | `inference.py` | Model loading, preprocessing, Grad-CAM, detection + type + embedding |
 | `runtime_limits.py` | Thread limits that keep memory low (imported first by `app.py`) |
 | `retrieval/gallery2d.py` | Builds and searches the 2D reference gallery |
+| `data/gallery_2d/` | Prebuilt reference gallery (103 searchable + 22 held-out UPENN-GBM slices, index, metadata) |
 | `retrieval/cli.py`, `retrieval/experiment.py`, `retrieval/upenn.py` | Builds the input bundle from the UPENN-GBM mirror |
 | `retrieval/` (other modules) | 3D research baseline (features, index, bundle, evaluation, nnU-Net helpers) |
 | `requirements.txt` | Dependencies for the app and the gallery builder |
@@ -378,7 +392,7 @@ dataset downloads automatically. To use your own uploads, change `HF_REPO_ID` in
 |---|---|
 | `tensorflow==2.20.0` fails to install | Use 64-bit Python 3.12: `py -3.12 -m venv .venv` |
 | `OpenBLAS error: Memory allocation still failed` | Close other heavy programs and run only one copy of the app. `runtime_limits.py` already keeps the app near 0.7 GB |
-| *Reference library unavailable* | Build it: `python -m retrieval.gallery2d prepare` (needs `artifacts/gallery_bundle/`, see section 10), or set `GALLERY_2D_DIR` |
+| *Reference library unavailable* | The shipped `data/gallery_2d/` is missing or `GALLERY_2D_DIR` points to a wrong folder. Restore the folder from Git (`git checkout -- data/gallery_2d`), unset `GALLERY_2D_DIR`, or rebuild with `python -m retrieval.gallery2d prepare` (section 10) |
 | *The search index was built with ...* | Rebuild the index: `python -m retrieval.gallery2d index` |
 | First analysis is slow | The model weights (~260 MB) are downloading from Hugging Face; later runs use the cache |
 | Port 8501 already in use | Another copy is running; stop it, or add `--server.port 8502` |
@@ -389,8 +403,10 @@ dataset downloads automatically. To use your own uploads, change `HF_REPO_ID` in
 - **UPENN-GBM** (reference library): Bakas S. *et al.*, "The University of Pennsylvania glioblastoma (UPenn-GBM) cohort:
   advanced MRI, clinical, genomics, & radiomics", *Scientific Data* 9, 453 (2022). Data: The Cancer Imaging Archive,
   DOI [10.7937/TCIA.709X-DN49](https://doi.org/10.7937/TCIA.709X-DN49), licence **CC BY 4.0**. Files are read from the
-  individual-file mirror `https://github.com/data-nih/tcia/releases/tag/upenn-gbm`. No raw scans are stored in this
-  repository; the generated gallery is not committed.
+  individual-file mirror `https://github.com/data-nih/tcia/releases/tag/upenn-gbm`. No raw scans (NIfTI volumes) are
+  stored in this repository. `data/gallery_2d/` redistributes, under the same CC BY 4.0 licence and with this
+  attribution, 125 derived 2D slice images (one axial post-contrast T1 slice per case) and the de-identified fields
+  shown in the app (age, sex, tumour volume, IDH1, MGMT) from the collection's public `participants.tsv`.
 - **Training data**: `akar49/MRI_Classification` (Hugging Face) and *Brain Tumor MRI Dataset* by Masoud Nickparvar
   (Kaggle).
 - **Model weights**: `mvdu/brain-tumor-models` on Hugging Face (public), downloaded at run time and not redistributed here.

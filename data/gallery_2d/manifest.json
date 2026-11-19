@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "created_utc": "2026-11-18T17:49:34+00:00",
+  "source": "UPENN-GBM (Bakas et al., Scientific Data 2022), The Cancer Imaging Archive, DOI 10.7937/TCIA.709X-DN49, CC BY 4.0",
+  "mirror": "https://github.com/data-nih/tcia/releases/download/upenn-gbm",
+  "bundle_dir": "artifacts\\gallery_bundle",
+  "counts": {
+    "bundle_cases": 125,
+    "exported": 125,
+    "reference": 103,
+    "demo_held_out": 22,
+    "verified": 125,
+    "failed": 0
+  },
+  "failures": {},
+  "unverified_cases": [],
+  "identical_slices": [],
+  "verification": "participant ID is the numeric counterpart of the mirror subject; recorded slice is the largest tumour-area slice of the supplied mask; mask volume equals the bundle's tumour_volume_ml",
+  "index": {
+    "feature": "multiclass_resnet50.h5:resnet50-global-average-pool:brain-crop-128",
+    "cases": 103,
+    "dimensions": 2048,
+    "metric": "cosine similarity of L2-normalised image embeddings",
+    "built_utc": "2026-11-18T17:50:31+00:00"
+  }
+}
